@@ -3,67 +3,51 @@ from PIL import Image, ImageDraw, ImageFont
 import textwrap
 import io
 import google.generativeai as genai
-from duckduckgo_search import DDGS # 무료 검색 도구
 
 # ==========================================
-# 👇 API 키 입력 (혹시 틀려도 작동하게 만들었습니다!)
+# 👇 [필수] 제미나이 API 키를 따옴표("") 안에 넣어주세요!
 GEMINI_API_KEY = "AIzaSyC-QRPifVhQGIGCjxk2kKDC0htuyiG0fTk"
 # ==========================================
 
-# --- 1. 🌐 검색 함수 (API 키 필요 없음, 무제한 무료) ---
-def search_web(topic):
-    """오류 없이 무조건 검색 결과를 가져오는 함수"""
-    try:
-        # 10개의 최신 결과 수집
-        results = DDGS().text(f"{topic} 팩트 통계 순위", max_results=10)
-        return results
-    except Exception as e:
-        st.error(f"검색 도구 오류: {e}")
-        return []
-
-# --- 2. 🤖 제미나이 요약 (실패하면 바로 포기하고 원본 사용) ---
-def try_gemini_summary(topic, search_results):
-    # 키가 없거나 이상하면 바로 포기 -> 원본 데이터 사용
+# --- 1. 🧠 제미나이 직접 연결 (검색 없이 바로 작성) ---
+def direct_ai_generation(topic):
+    # 키 확인
     if len(GEMINI_API_KEY) < 10 or "여기에" in GEMINI_API_KEY:
+        st.error("🚨 API 키가 없습니다. 코드 상단에 키를 입력해주세요.")
         return None
 
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-1.5-flash') # 속도 빠른 최신 모델
         
-        # 검색 데이터 정리
-        data_text = ""
-        for item in search_results:
-            data_text += f"- {item['title']}: {item['body']}\n"
-
+        # 프롬프트: 검색하지 말고 너의 지식으로 써라!
         prompt = f"""
         주제: '{topic}'
-        위 데이터를 바탕으로 TOP 10 리스트를 한글로 작성해.
-        형식: "순위. 항목명 - 핵심설명(20자 이내)"
-        사족 금지. 오직 리스트만 출력.
+        
+        위 주제에 대해 너의 방대한 지식을 동원해서 가장 인기 있고 흥미로운 **TOP 10 랭킹**을 작성해.
+        
+        [작성 규칙]
+        1. 인터넷 검색하지 말고 네가 아는 정보를 바탕으로 써.
+        2. 설명은 20자 이내로 짧고 강렬하게.
+        3. 서론, 결론, 인사말 절대 금지. 오직 리스트만 출력해.
+        
+        [출력 포맷]
+        1. 핵심키워드 - 핵심설명
+        2. 핵심키워드 - 핵심설명
+        ...
         """
         
         response = model.generate_content(prompt)
         return response.text.strip()
-    except:
-        # 🔥 에러가 나면 조용히 None을 반환하고 비상 모드로 전환
+
+    except Exception as e:
+        st.error(f"AI 연결 오류: {e}")
         return None
 
-# --- 3. ⚡ 비상용 포맷터 (AI가 안 될 때 작동) ---
-def fallback_formatter(search_results):
-    """검색된 제목과 내용을 그대로 리스트로 만듦"""
-    formatted_text = ""
-    for i, item in enumerate(search_results, 1):
-        title = item['title'].replace("...", "")
-        # 제목이 너무 길면 자름
-        if len(title) > 20: title = title[:20]
-        formatted_text += f"{i}. {title} - 상세 내용 참조\n"
-    return formatted_text
-
-# --- 4. 🎨 이미지 생성 함수 ---
-def create_image(topic, text_content):
+# --- 2. 🎨 이미지 생성 (디자인 공장) ---
+def create_ranking_image(topic, text_content):
     W, H = 1080, 1350 
-    img = Image.new('RGB', (W, H), color=(0, 0, 0))
+    img = Image.new('RGB', (W, H), color=(0, 0, 0)) # 검은 배경
     draw = ImageDraw.Draw(img)
 
     try:
@@ -75,7 +59,7 @@ def create_image(topic, text_content):
         font_list = ImageFont.load_default()
         font_sub = ImageFont.load_default()
 
-    # 테두리
+    # 빨간 테두리
     draw.rectangle([(0,0), (W, H)], outline=(255, 0, 0), width=15)
     draw.line([(0, 250), (W, 250)], fill=(255, 0, 0), width=5)
 
@@ -88,6 +72,8 @@ def create_image(topic, text_content):
         draw.text(((W - text_w) / 2, current_h), line, font=font_title, fill="white")
         current_h += 80
 
+    draw.text((50, 270), "AI RANKING", font=font_sub, fill="gray")
+
     # 리스트 그리기
     lines = text_content.strip().split('\n')
     start_y = 350
@@ -95,33 +81,33 @@ def create_image(topic, text_content):
     
     count = 0
     for line in lines:
-        clean = line.strip()
-        if not clean: continue
+        clean_line = line.strip()
+        if not clean_line: continue
         
-        # 숫자(순위)로 시작하는지 확인
-        if clean[0].isdigit():
+        # 숫자로 시작하는 줄만 이미지에 넣기
+        if clean_line[0].isdigit():
             count += 1
-            if count > 10: break # 최대 10개
+            if count > 10: break
             
-            if len(clean) > 28: clean = clean[:28] + "..."
+            if len(clean_line) > 26: clean_line = clean_line[:26] + "..."
             
+            # 1~3위 강조
             color = (255, 215, 0) if count <= 3 else "white"
-            draw.text((80, start_y), clean, font=font_list, fill=color)
+            draw.text((80, start_y), clean_line, font=font_list, fill=color)
             start_y += gap
 
-    # 하단
     footer = "구독 🙏 좋아요 ❤️"
     bbox_foot = draw.textbbox((0, 0), footer, font=font_list)
     draw.text(((W - (bbox_foot[2] - bbox_foot[0]))/2, H - 100), footer, font=font_list, fill=(255, 100, 100))
 
     return img
 
-# --- 5. 메인 화면 ---
-st.set_page_config(page_title="무적의 쇼츠 공장", page_icon="🛡️", layout="wide")
-st.title("🛡️ 3호점: 절대 멈추지 않는 공장")
+# --- 3. 메인 화면 ---
+st.set_page_config(page_title="AI 직통 공장", page_icon="⚡", layout="wide")
+st.title("⚡ 3호점: AI 직통 공장")
 
-if 'final_text' not in st.session_state:
-    st.session_state['final_text'] = ""
+if 'result_text' not in st.session_state:
+    st.session_state['result_text'] = ""
 if 'img' not in st.session_state:
     st.session_state['img'] = None
 
@@ -129,48 +115,41 @@ col1, col2 = st.columns([1, 1])
 
 with col1:
     st.subheader("1. 주제 입력")
-    topic = st.text_input("주제", value="2025년 뜨는 기술 TOP 10")
+    topic = st.text_input("주제", value="2025년 대박 날 AI 관련주 TOP 10")
     
-    if st.button("🚀 실행 (실패 시 원본 데이터 출력)", use_container_width=True, type="primary"):
-        with st.spinner("데이터를 찾는 중..."):
-            # 1. 무조건 검색 (키 필요 없음)
-            results = search_web(topic)
+    # 버튼 하나로 해결
+    if st.button("🚀 실행 (검색 없이 AI가 바로 작성)", use_container_width=True, type="primary"):
+        with st.spinner("제미나이가 머리를 굴리는 중입니다..."):
+            # 검색 과정 삭제! 바로 AI 호출
+            ai_result = direct_ai_generation(topic)
             
-            if results:
-                # 2. 제미나이에게 "한번 다듬어봐" 라고 시킴
-                summary = try_gemini_summary(topic, results)
-                
-                if summary:
-                    # 성공하면 예쁜 AI 요약본 사용
-                    st.success("✅ AI 분석 성공!")
-                    st.session_state['final_text'] = summary
-                else:
-                    # 실패하면 검색 결과 그대로 사용 (에러 없음!)
-                    st.warning("⚠️ AI 연결 불안정 -> 검색 결과 원본을 표시합니다.")
-                    st.session_state['final_text'] = fallback_formatter(results)
-                
-                # 3. 이미지 생성
-                st.session_state['img'] = create_image(topic, st.session_state['final_text'])
+            if ai_result:
+                st.session_state['result_text'] = ai_result
+                # 바로 이미지 생성
+                st.session_state['img'] = create_ranking_image(topic, ai_result)
+                st.success("작성 완료!")
             else:
-                st.error("검색 결과가 없습니다.")
+                pass # 에러는 함수 안에서 처리
 
-    # 텍스트 수정창
+    # 결과 수정란
     edited_text = st.text_area(
-        "내용 수정 (여기서 고치면 이미지에 반영됨)", 
-        value=st.session_state['final_text'],
-        height=400
+        "AI가 쓴 내용 수정하기", 
+        value=st.session_state['result_text'],
+        height=350
     )
     
-    if st.button("🔄 수정사항 반영"):
+    if st.button("🔄 수정한 내용으로 이미지 다시 만들기"):
         if edited_text:
-            st.session_state['img'] = create_image(topic, edited_text)
-            st.success("반영 완료")
+            st.session_state['img'] = create_ranking_image(topic, edited_text)
+            st.success("반영 완료!")
 
 with col2:
     st.subheader("🖼️ 결과물")
     if st.session_state['img']:
-        st.image(st.session_state['img'], caption="결과 이미지", use_container_width=True)
+        st.image(st.session_state['img'], caption="최종 결과", use_container_width=True)
         
         buf = io.BytesIO()
         st.session_state['img'].save(buf, format="PNG")
-        st.download_button("💾 다운로드", buf.getvalue(), "result.png", "image/png", use_container_width=True)
+        st.download_button("💾 이미지 다운로드", buf.getvalue(), "ai_result.png", "image/png", use_container_width=True)
+    else:
+        st.info("왼쪽 버튼을 누르면 AI가 즉시 내용을 채웁니다.")
