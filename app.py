@@ -1,65 +1,80 @@
 import streamlit as st
+import urllib.request
+import urllib.parse
 import json
+import re
 from PIL import Image, ImageDraw, ImageFont
 import textwrap
 import io
 import google.generativeai as genai
-from duckduckgo_search import DDGS  # 👈 구글급 성능의 무료 검색 도구
 
 # ==========================================
-# 👇 API 키 입력 (따옴표 필수!)
+# 👇 [필수] 제미나이 API 키를 여기에 붙여넣으세요! (따옴표 필수)
 GEMINI_API_KEY = "AIzaSyC-QRPifVhQGIGCjxk2kKDC0htuyiG0fTk"
 # ==========================================
 
-# --- 1. 🌐 실시간 웹 검색 함수 (네이버 대신 구글/웹 검색) ---
-def web_search(keyword):
-    """DuckDuckGo를 통해 전 세계 웹 문서를 검색합니다."""
+# --- 1. 📰 네이버 '뉴스' 검색 (블로그 X, 전문기사 O) ---
+def naver_news_search(keyword):
+    # 사장님이 처음에 주신 네이버 키를 적용했습니다 (확실한 작동 보장)
+    client_id = "sk0nUwhPD16DNEo0gQkD"
+    client_secret = "1cLzXGU3Yn"
+    
+    clean_keyword = keyword.replace('"', '').replace("'", "")
+    encText = urllib.parse.quote(clean_keyword)
+    
+    # 'news' 카테고리로 변경하여 신뢰도 급상승
+    # display=30: 기사 30개를 읽어서 정밀 분석
+    url = f"https://openapi.naver.com/v1/search/news.json?query={encText}&display=30&sort=sim" 
+    
+    request = urllib.request.Request(url)
+    request.add_header("X-Naver-Client-Id", client_id)
+    request.add_header("X-Naver-Client-Secret", client_secret)
+    
     try:
-        # 검색어 뒤에 '최신 정보' 등을 붙여 정확도 높임
-        search_query = f"{keyword} 최신 분석 정리"
-        
-        # 웹에서 상위 10개 결과 수집
-        results = DDGS().text(search_query, max_results=10)
-        return results
+        response = urllib.request.urlopen(request)
+        if response.getcode() == 200:
+            return json.loads(response.read().decode('utf-8'))['items']
     except Exception as e:
-        st.error(f"웹 검색 중 오류 발생: {e}")
+        st.error(f"네이버 검색 오류: {e}")
         return None
+    return None
 
-# --- 2. 🤖 제미나이 분석 및 요약 ---
-def get_gemini_response(topic, search_results):
+# --- 2. 🤖 제미나이 분석 (뉴스 기사 기반) ---
+def get_gemini_analysis(topic, news_data):
     if len(GEMINI_API_KEY) < 10 or "여기에" in GEMINI_API_KEY:
-        st.error("API 키를 입력해주세요!")
+        st.error("🚨 API 키가 없습니다. 코드 상단에 키를 입력해주세요.")
         return None
 
-    # 검색된 데이터를 하나의 텍스트로 합침
+    # 뉴스 데이터 텍스트화
     context = ""
-    for item in search_results:
-        title = item.get('title', '제목 없음')
-        body = item.get('body', '내용 없음')
-        context += f"출처: {title}\n내용: {body}\n\n"
+    for item in news_data:
+        # 뉴스 제목과 요약본 추출 (HTML 태그 제거)
+        title = re.sub('<.*?>', '', item['title']).replace('&quot;', '"')
+        desc = re.sub('<.*?>', '', item['description']).replace('&quot;', '"')
+        context += f"기사: {title} / 내용: {desc}\n"
 
-    # 제미나이에게 내리는 '분석가' 모드 명령
+    # 제미나이에게 내리는 '전문가' 명령
     prompt = f"""
-    너는 세계 최고의 경제 분석가야. 아래 수집된 '실시간 웹 검색 데이터'를 정밀 분석해서 '{topic}'에 대한 TOP 10 랭킹을 작성해.
+    너는 30년 경력의 경제 전문 기자야. 
+    아래 '최신 뉴스 기사들'을 종합 분석해서 '{topic}'에 대한 TOP 10 랭킹을 작성해.
     
-    [분석 규칙]
-    1. 블로그 광고글 말고, 뉴스나 전문 분석 자료를 우선적으로 반영해.
-    2. 구체적인 종목명, 기업명, 아이템명을 명확하게 뽑아내.
-    3. 데이터가 부족하면 너의 배경지식을 20% 정도 섞어서 완성도 있게 만들어.
+    [분석 원칙]
+    1. 블로그의 '카더라' 정보가 아닌, 뉴스 기사의 '팩트'를 기반으로 해.
+    2. 중복된 이슈는 하나로 합치고, 가장 중요한 키워드를 뽑아내.
+    3. 설명은 독자가 혹할 수 있도록 핵심만 20자 이내로 요약해.
     
-    [출력 형식]
-    반드시 아래 포맷만 출력해 (설명은 20자 내외로 짧고 강렬하게):
-    1. 핵심이름 - 핵심설명
-    2. 핵심이름 - 핵심설명
+    [출력 양식] (이 양식 그대로만 출력할 것)
+    1. 핵심키워드 - 핵심설명
+    2. 핵심키워드 - 핵심설명
     ...
     
-    [수집된 웹 데이터]
+    [뉴스 데이터]
     {context}
     """
 
     genai.configure(api_key=GEMINI_API_KEY)
 
-    # 모델 자동 우회 (에러 방지)
+    # 모델 자동 연결 시도 (안정성 확보)
     models = ['gemini-1.5-flash', 'gemini-pro', 'gemini-1.0-pro']
     
     for model_name in models:
@@ -70,7 +85,7 @@ def get_gemini_response(topic, search_results):
         except:
             continue
 
-    st.error("AI 연결 실패. 잠시 후 다시 시도해주세요.")
+    st.error("AI 연결이 지연되고 있습니다. 잠시 후 다시 시도해주세요.")
     return None
 
 # --- 3. 이미지 생성 함수 ---
@@ -88,7 +103,7 @@ def create_ranking_image(topic, text_content):
         font_list = ImageFont.load_default()
         font_sub = ImageFont.load_default()
 
-    # 빨간 테두리 디자인
+    # 디자인 요소
     draw.rectangle([(0,0), (W, H)], outline=(255, 0, 0), width=15)
     draw.line([(0, 250), (W, 250)], fill=(255, 0, 0), width=5)
 
@@ -101,9 +116,9 @@ def create_ranking_image(topic, text_content):
         draw.text(((W - text_w) / 2, current_h), line, font=font_title, fill="white")
         current_h += 80
 
-    draw.text((50, 270), "Global Data Analysis", font=font_sub, fill="gray")
+    draw.text((50, 270), "NEWS DATA ANALYSIS", font=font_sub, fill="gray")
 
-    # 내용 그리기
+    # 리스트 그리기
     lines = text_content.strip().split('\n')
     start_y = 350
     gap = 90
@@ -113,14 +128,13 @@ def create_ranking_image(topic, text_content):
         clean_line = line.strip()
         if not clean_line: continue
         
-        # 번호가 있는 줄만 처리 (1. 등)
+        # 숫자로 시작하는 라인만 추출
         if len(clean_line) > 0 and clean_line[0].isdigit():
             count += 1
             if count > 10: break
             
             if len(clean_line) > 26: clean_line = clean_line[:26] + "..."
             
-            # 1~3위 금색 강조
             color = (255, 215, 0) if count <= 3 else "white"
             draw.text((80, start_y), clean_line, font=font_list, fill=color)
             start_y += gap
@@ -132,8 +146,8 @@ def create_ranking_image(topic, text_content):
     return img
 
 # --- 4. 메인 화면 ---
-st.set_page_config(page_title="글로벌 쇼츠 공장", page_icon="🌍", layout="wide")
-st.title("🌍 3호점: 글로벌 데이터 쇼츠 공장")
+st.set_page_config(page_title="뉴스 기반 쇼츠 공장", page_icon="📰", layout="wide")
+st.title("📰 3호점: 뉴스 데이터 쇼츠 공장")
 
 if 'draft' not in st.session_state:
     st.session_state['draft'] = ""
@@ -143,31 +157,31 @@ if 'img' not in st.session_state:
 col1, col2 = st.columns([1, 1])
 
 with col1:
-    st.subheader("1. 주제 입력 (구글/웹 데이터 기반)")
-    topic = st.text_input("주제", value="2025년 글로벌 AI 트렌드 TOP 10")
+    st.subheader("1. 주제 입력 (뉴스 데이터 기반)")
+    topic = st.text_input("주제", value="2025년 급부상하는 AI 기업 TOP 10")
     
-    if st.button("🚀 웹 검색 + AI 분석 + 이미지 생성", use_container_width=True, type="primary"):
-        with st.spinner("구글(웹)에서 최신 정보를 수집하고 분석 중입니다..."):
-            # 1. 웹 검색 (DuckDuckGo)
-            search_data = web_search(topic)
+    if st.button("🚀 뉴스 검색 + AI 분석 + 이미지 생성", use_container_width=True, type="primary"):
+        with st.spinner("최신 뉴스 기사 30개를 분석 중입니다..."):
+            # 1. 네이버 뉴스 검색 (확실한 데이터)
+            news_data = naver_news_search(topic)
             
-            if search_data:
+            if news_data:
                 # 2. 제미나이 분석
-                ai_result = get_gemini_response(topic, search_data)
+                ai_result = get_gemini_analysis(topic, news_data)
                 
                 if ai_result:
                     st.session_state['draft'] = ai_result
                     # 3. 이미지 생성
                     st.session_state['img'] = create_ranking_image(topic, ai_result)
-                    st.success("분석 완료! 진짜 정보를 확인하세요.")
+                    st.success("뉴스 분석 완료! 결과를 확인하세요.")
                 else:
-                    st.error("AI 연결 실패 (키를 확인하세요)")
+                    st.error("AI 연결에 실패했습니다. (키를 확인하세요)")
             else:
-                st.error("웹 검색 결과가 없습니다.")
+                st.error("관련 뉴스 기사가 없습니다.")
 
     # 수정 공간
     edited_text = st.text_area(
-        "내용 수정 (AI 분석 결과)", 
+        "내용 수정 (뉴스 분석 결과)", 
         value=st.session_state['draft'],
         height=350
     )
@@ -184,6 +198,6 @@ with col2:
         
         buf = io.BytesIO()
         st.session_state['img'].save(buf, format="PNG")
-        st.download_button("💾 이미지 다운로드", buf.getvalue(), "global_ranking.png", "image/png", use_container_width=True)
+        st.download_button("💾 이미지 다운로드", buf.getvalue(), "news_ranking.png", "image/png", use_container_width=True)
     else:
-        st.info("왼쪽 버튼을 누르면 전 세계 웹을 뒤져서 결과를 만듭니다.")
+        st.info("왼쪽 버튼을 누르면 뉴스를 분석해 순위표를 만듭니다.")
