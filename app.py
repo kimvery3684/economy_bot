@@ -9,7 +9,7 @@ import io
 import google.generativeai as genai
 
 # ==========================================
-# 👇 여기에 제미나이 API 키를 입력하세요! (따옴표 안에 넣기)
+# 👇 여기에 제미나이 API 키를 입력하세요!
 GEMINI_API_KEY = "AIzaSyC-QRPifVhQGIGCjxk2kKDC0htuyiG0fTk"
 # ==========================================
 
@@ -34,11 +34,8 @@ def naver_blog_search(keyword):
         return None
     return None
 
-# --- 2. 🤖 제미나이 지능형 요약 함수 (최신 모델 적용) ---
+# --- 2. 🤖 제미나이 지능형 요약 함수 ---
 def ask_gemini_to_organize(topic, raw_data):
-    """네이버 블로그 데이터를 제미나이에게 주고 깔끔한 랭킹으로 정리시킴"""
-    
-    # 키가 제대로 입력되었는지 확인
     if len(GEMINI_API_KEY) < 10 or "여기에" in GEMINI_API_KEY:
         st.error("⚠️ 코드 상단의 GEMINI_API_KEY에 실제 키를 입력해주세요!")
         return []
@@ -46,17 +43,15 @@ def ask_gemini_to_organize(topic, raw_data):
     try:
         genai.configure(api_key=GEMINI_API_KEY)
         
-        # 🔥 [수정됨] 최신 모델 이름인 'gemini-1.5-flash'로 변경했습니다.
+        # 🔥 [수정] 가장 호환성이 좋은 모델명으로 지정
         model = genai.GenerativeModel('gemini-1.5-flash')
         
-        # 블로그 데이터 텍스트화
         context = ""
         for item in raw_data:
             title = item['title'].replace('<b>', '').replace('</b>', '')
             desc = item['description'].replace('<b>', '').replace('</b>', '')
             context += f"- {title} : {desc}\n"
 
-        # 제미나이 명령 (프롬프트)
         prompt = f"""
         너는 경제 유튜브 쇼츠 작가야. 아래 블로그 검색 결과를 분석해서 '{topic}'에 맞는 순위(TOP 10)를 만들어줘.
         
@@ -77,13 +72,21 @@ def ask_gemini_to_organize(topic, raw_data):
         return cleaned_list[:10]
 
     except Exception as e:
-        st.error(f"제미나이 오류: {e}")
-        return []
+        # 혹시 1.5-flash가 안되면 pro로 자동 재시도
+        try:
+            model_backup = genai.GenerativeModel('gemini-pro')
+            response = model_backup.generate_content(prompt)
+            lines = response.text.strip().split('\n')
+            cleaned_list = [line for line in lines if line.strip() != ""]
+            return cleaned_list[:10]
+        except:
+            st.error(f"제미나이 오류: {e}")
+            return []
 
 # --- 3. 이미지 생성 함수 ---
 def create_ranking_image(topic, ranking_list):
     W, H = 1080, 1350 
-    img = Image.new('RGB', (W, H), color=(0, 0, 0)) # 검은 배경
+    img = Image.new('RGB', (W, H), color=(0, 0, 0))
     draw = ImageDraw.Draw(img)
 
     try:
@@ -95,11 +98,9 @@ def create_ranking_image(topic, ranking_list):
         font_list = ImageFont.load_default()
         font_sub = ImageFont.load_default()
 
-    # 테두리 및 디자인
     draw.rectangle([(0,0), (W, H)], outline=(255, 0, 0), width=15)
     draw.line([(0, 250), (W, 250)], fill=(255, 0, 0), width=5)
 
-    # 제목
     para = textwrap.wrap(topic, width=16)
     current_h = 80
     for line in para:
@@ -110,7 +111,6 @@ def create_ranking_image(topic, ranking_list):
 
     draw.text((50, 270), "Analysis by Gemini AI", font=font_sub, fill="gray")
 
-    # 리스트 그리기
     start_y = 350
     gap = 90
     for i, text in enumerate(ranking_list, 1):
@@ -119,7 +119,6 @@ def create_ranking_image(topic, ranking_list):
         draw.text((80, start_y), text, font=font_list, fill=color)
         start_y += gap
 
-    # 푸터
     footer = "구독 🙏 좋아요 ❤️"
     bbox_foot = draw.textbbox((0, 0), footer, font=font_list)
     draw.text(((W - (bbox_foot[2] - bbox_foot[0]))/2, H - 100), footer, font=font_list, fill=(255, 100, 100))
@@ -152,8 +151,6 @@ with col1:
                         img = create_ranking_image(topic, clean_ranking)
                         st.session_state['result_img'] = img
                         st.success("완료!")
-                else:
-                    st.error("제미나이가 응답하지 않습니다. (키 오류일 수 있음)")
         else:
             st.error("검색 결과가 없습니다.")
 
