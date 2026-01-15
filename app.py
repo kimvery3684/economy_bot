@@ -34,16 +34,20 @@ def naver_blog_search(keyword):
         return None
     return None
 
-# --- 2. 🤖 제미나이 지능형 요약 함수 ---
+# --- 2. 🤖 제미나이 지능형 요약 함수 (최신 모델 적용) ---
 def ask_gemini_to_organize(topic, raw_data):
     """네이버 블로그 데이터를 제미나이에게 주고 깔끔한 랭킹으로 정리시킴"""
-    if "여기에" in GEMINI_API_KEY:
-        st.error("⚠️ 코드 맨 위 'GEMINI_API_KEY'에 키를 입력해주세요!")
+    
+    # 키가 제대로 입력되었는지 확인
+    if len(GEMINI_API_KEY) < 10 or "여기에" in GEMINI_API_KEY:
+        st.error("⚠️ 코드 상단의 GEMINI_API_KEY에 실제 키를 입력해주세요!")
         return []
 
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-pro')
+        
+        # 🔥 [수정됨] 최신 모델 이름인 'gemini-1.5-flash'로 변경했습니다.
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
         # 블로그 데이터 텍스트화
         context = ""
@@ -69,7 +73,6 @@ def ask_gemini_to_organize(topic, raw_data):
         
         response = model.generate_content(prompt)
         lines = response.text.strip().split('\n')
-        # 빈 줄 제거하고 리스트로 변환
         cleaned_list = [line for line in lines if line.strip() != ""]
         return cleaned_list[:10]
 
@@ -150,7 +153,7 @@ with col1:
                         st.session_state['result_img'] = img
                         st.success("완료!")
                 else:
-                    st.error("제미나이 키를 확인해주세요!")
+                    st.error("제미나이가 응답하지 않습니다. (키 오류일 수 있음)")
         else:
             st.error("검색 결과가 없습니다.")
 
