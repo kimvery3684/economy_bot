@@ -6,15 +6,14 @@ import re
 from PIL import Image, ImageDraw, ImageFont
 import textwrap
 import io
-import requests  # 구글 도구 대신 직접 접속 (오류 원천 차단)
+import google.generativeai as genai  # 라이브러리 사용 (REST 방식 폐기)
 
 # ==========================================
-# 👇 [중요] 제미나이 API 키를 따옴표("") 사이에 정확히 넣어주세요.
-# 예시: GEMINI_API_KEY = "AIzaSy..." (끝에 따옴표 꼭 닫기!)
+# 👇 API 키 입력 (따옴표 필수!)
 GEMINI_API_KEY = "AIzaSyC-QRPifVhQGIGCjxk2kKDC0htuyiG0fTk"
 # ==========================================
 
-# --- 1. 네이버 검색 함수 (변경 없음) ---
+# --- 1. 네이버 검색 함수 ---
 def naver_blog_search(keyword):
     client_id = "sk0nUwhPD16DNEo0gQkD"
     client_secret = "1cLzXGU3Yn"
@@ -31,65 +30,65 @@ def naver_blog_search(keyword):
         response = urllib.request.urlopen(request)
         if response.getcode() == 200:
             return json.loads(response.read().decode('utf-8'))['items']
-    except Exception as e:
+    except:
         return None
     return None
 
-# --- 2. 🤖 제미나이 연결 함수 (가장 안정적인 gemini-pro 사용) ---
-def ask_gemini_to_draft(topic, raw_data):
-    # 키 입력 확인
-    if len(GEMINI_API_KEY) < 10 or "여기에" in GEMINI_API_KEY:
-        st.error("🚨 오류: 코드 상단의 GEMINI_API_KEY에 실제 키를 입력하지 않았습니다.")
-        return None
-
-    # 데이터 정리
-    context = ""
-    for item in raw_data:
-        title = item['title'].replace('<b>', '').replace('</b>', '')
-        desc = item['description'].replace('<b>', '').replace('</b>', '')
-        context += f"- {title} : {desc}\n"
-
-    # 프롬프트
-    prompt = f"""
-    너는 경제 쇼츠 작가야. 아래 블로그 내용을 바탕으로 '{topic}'에 들어갈 TOP 10 리스트를 작성해줘.
-    
-    [규칙]
-    1. 광고는 빼고 핵심 정보만 골라.
-    2. 각 줄은 '순위. 키워드 - 설명' 형태로 작성해.
-    3. 설명은 최대한 짧고 임팩트 있게(20자 이내).
-    4. 서론, 본론 다 빼고 오직 리스트 10줄만 출력해.
-
-    [참고 데이터]
-    {context}
-    """
-
-    # 🔥 [핵심 수정] 모델을 'gemini-pro'로 변경 (가장 호환성 높음)
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
-    
-    headers = {'Content-Type': 'application/json'}
-    data = { "contents": [{ "parts": [{"text": prompt}] }] }
-
-    try:
-        response = requests.post(url, headers=headers, json=data)
+# --- 2. ⚡ 비상용: 파이썬 단순 정리 함수 (AI 고장 시 작동) ---
+def fallback_formatter(raw_data):
+    """AI가 안 될 때, 코드가 직접 제목과 내용을 잘라서 정리함"""
+    result_text = ""
+    for i, item in enumerate(raw_data[:10], 1):
+        # HTML 태그 제거
+        title = item['title'].replace('<b>', '').replace('</b>', '').replace('&quot;', '"')
+        desc = item['description'].replace('<b>', '').replace('</b>', '').replace('&quot;', '"')
         
-        # 성공 (200 OK)
-        if response.status_code == 200:
-            result = response.json()
-            try:
-                return result['candidates'][0]['content']['parts'][0]['text']
-            except:
-                st.error("AI가 답변을 생성했지만 내용을 추출하지 못했습니다. 다시 시도해주세요.")
-                return None
-        else:
-            # 실패 시 에러 메시지 출력
-            st.error(f"AI 연결 오류 ({response.status_code}): {response.text}")
-            return None
-            
-    except Exception as e:
-        st.error(f"서버 통신 실패: {e}")
-        return None
+        # 너무 긴 내용은 자름
+        if len(desc) > 30: desc = desc[:30] + "..."
+        
+        result_text += f"{i}. {title}\n   - 설명: {desc}\n"
+    return result_text
 
-# --- 3. 이미지 생성 함수 (변경 없음) ---
+# --- 3. 🤖 제미나이 연결 (실패 시 비상용 함수 호출) ---
+def get_draft_content(topic, raw_data):
+    # 1. 키가 없으면 바로 비상 모드
+    if len(GEMINI_API_KEY) < 10 or "여기에" in GEMINI_API_KEY:
+        st.toast("⚠️ API 키 없음: 비상 모드로 정리합니다.")
+        return fallback_formatter(raw_data)
+
+    # 2. 제미나이 시도
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel("gemini-1.5-flash") # 최신 모델
+        
+        context = ""
+        for item in raw_data:
+            t = item['title'].replace('<b>', '').replace('</b>', '')
+            d = item['description'].replace('<b>', '').replace('</b>', '')
+            context += f"- {t} : {d}\n"
+
+        prompt = f"""
+        주제: '{topic}'
+        위 데이터를 바탕으로 유튜브 쇼츠용 랭킹 TOP 10을 작성해.
+        
+        [조건]
+        1. 인사말, 서론 절대 금지. 오직 리스트만 출력.
+        2. 형식: "순위. 키워드 - 짧은설명"
+        3. 설명은 20자 이내로 핵심만.
+        
+        [데이터]
+        {context}
+        """
+        
+        response = model.generate_content(prompt)
+        return response.text.strip()
+
+    except Exception as e:
+        # 🔥 여기가 핵심! AI 에러 나면 당황하지 않고 비상 함수 가동
+        st.toast(f"🤖 AI 연결 불안정 ({e}). 비상 시스템 가동!")
+        return fallback_formatter(raw_data)
+
+# --- 4. 이미지 생성 함수 ---
 def create_ranking_image(topic, text_content):
     W, H = 1080, 1350 
     img = Image.new('RGB', (W, H), color=(0, 0, 0))
@@ -98,7 +97,7 @@ def create_ranking_image(topic, text_content):
     try:
         font_title = ImageFont.truetype("NanumGothic-ExtraBold.ttf", 70) 
         font_list = ImageFont.truetype("NanumGothic-ExtraBold.ttf", 40)
-        font_sub = ImageFont.truetype("NanumGothic-ExtraBold.ttf", 35)
+        font_sub = ImageFont.truetype("NanumGothic-ExtraBold.ttf", 30)
     except:
         font_title = ImageFont.load_default()
         font_list = ImageFont.load_default()
@@ -117,9 +116,9 @@ def create_ranking_image(topic, text_content):
         draw.text(((W - text_w) / 2, current_h), line, font=font_title, fill="white")
         current_h += 80
 
-    draw.text((50, 270), "Updated by Gemini AI", font=font_sub, fill="gray")
+    draw.text((50, 270), "Ranking System", font=font_sub, fill="gray")
 
-    # 리스트 그리기
+    # 내용 그리기
     lines = text_content.strip().split('\n')
     start_y = 350
     gap = 90
@@ -129,15 +128,14 @@ def create_ranking_image(topic, text_content):
         clean_line = line.strip()
         if not clean_line: continue
         
-        # 순위 숫자로 시작하는지 확인 (예: "1. 삼성전자")
-        # AI가 이상한 말을 섞을 수 있으므로 필터링
-        if len(clean_line) > 0:
+        # '1. ' 처럼 숫자로 시작하는 줄만 이미지에 넣기
+        if line[0].isdigit():
             count += 1
             if count > 10: break
-
-            if len(clean_line) > 28: 
-                clean_line = clean_line[:28] + "..."
-                
+            
+            # 너무 길면 자르기
+            if len(clean_line) > 28: clean_line = clean_line[:28] + "..."
+            
             color = (255, 215, 0) if count <= 3 else "white"
             draw.text((80, start_y), clean_line, font=font_list, fill=color)
             start_y += gap
@@ -148,56 +146,49 @@ def create_ranking_image(topic, text_content):
 
     return img
 
-# --- 4. 메인 화면 ---
-st.set_page_config(page_title="AI 경제 쇼츠 공장", page_icon="🏭", layout="wide")
-st.title("🏭 3호점: 편집 가능한 쇼츠 공장")
+# --- 5. 메인 화면 ---
+st.set_page_config(page_title="무중단 쇼츠 공장", page_icon="🏭", layout="wide")
+st.title("🏭 3호점: 절대 멈추지 않는 공장")
 
-if 'draft_text' not in st.session_state:
-    st.session_state['draft_text'] = ""
-if 'final_img' not in st.session_state:
-    st.session_state['final_img'] = None
+if 'draft' not in st.session_state:
+    st.session_state['draft'] = ""
+if 'img' not in st.session_state:
+    st.session_state['img'] = None
 
 col1, col2 = st.columns([1, 1])
 
 with col1:
-    st.subheader("1. 주제 및 내용 편집")
-    topic = st.text_input("주제", value="2025년 급등 예상 AI 관련주 TOP 10")
+    st.subheader("1. 콘텐츠 편집")
+    topic = st.text_input("주제", value="2025년 뜨는 창업 아이템 TOP 10")
     
-    # [Step 1] 검색 및 초안 생성
-    if st.button("Step 1. 검색하고 초안 만들기 📝", use_container_width=True):
-        with st.spinner("네이버 검색 후 AI가 요약 중입니다... (약 5초 소요)"):
+    if st.button("Step 1. 데이터 수집 및 초안 작성 📝", use_container_width=True):
+        with st.spinner("데이터를 긁어오는 중..."):
             raw_data = naver_blog_search(topic)
             if raw_data:
-                draft = ask_gemini_to_draft(topic, raw_data)
-                if draft:
-                    st.session_state['draft_text'] = draft
-                    st.success("초안 작성 완료! 아래 내용을 수정하세요.")
+                # 여기서 AI가 안 되면 -> 자동으로 '비상용 함수'가 작동함
+                st.session_state['draft'] = get_draft_content(topic, raw_data)
+                st.success("작성 완료! 아래 내용을 입맛대로 수정하세요.")
             else:
                 st.error("네이버 검색 결과가 없습니다.")
 
-    # [편집기] 사용자가 직접 수정
-    edited_text = st.text_area(
-        "내용 수정 (오타나 순위를 직접 고치세요)", 
-        value=st.session_state['draft_text'],
-        height=400,
-        placeholder="위 버튼을 누르면 AI가 작성한 초안이 여기에 나타납니다."
+    # 편집기
+    text_input = st.text_area(
+        "내용 수정 (AI가 쓴 게 맘에 안 들면 직접 고치세요!)", 
+        value=st.session_state['draft'],
+        height=400
     )
 
-    # [Step 2] 이미지 생성
-    if st.button("Step 2. 이 내용으로 이미지 만들기 🎨", use_container_width=True, type="primary"):
-        if edited_text:
-            img = create_ranking_image(topic, edited_text)
-            st.session_state['final_img'] = img
+    if st.button("Step 2. 결과물 이미지 생성 🎨", use_container_width=True, type="primary"):
+        if text_input:
+            st.session_state['img'] = create_ranking_image(topic, text_input)
         else:
-            st.warning("내용이 비어있습니다. 먼저 Step 1을 진행해주세요.")
+            st.warning("내용이 없습니다.")
 
 with col2:
-    st.subheader("🖼️ 결과 이미지")
-    if st.session_state['final_img']:
-        st.image(st.session_state['final_img'], caption="최종 결과물", use_container_width=True)
+    st.subheader("🖼️ 완성된 이미지")
+    if st.session_state['img']:
+        st.image(st.session_state['img'], caption="최종 결과", use_container_width=True)
         
         buf = io.BytesIO()
-        st.session_state['final_img'].save(buf, format="PNG")
-        st.download_button("💾 이미지 다운로드", buf.getvalue(), "shorts_rank.png", "image/png", use_container_width=True)
-    else:
-        st.info("왼쪽에서 [Step 2] 버튼을 누르면 완성된 이미지가 여기에 뜹니다.")
+        st.session_state['img'].save(buf, format="PNG")
+        st.download_button("💾 다운로드", buf.getvalue(), "ranking.png", "image/png", use_container_width=True)
