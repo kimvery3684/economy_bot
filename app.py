@@ -5,58 +5,55 @@ import io
 import requests
 import json
 
-# ==========================================
-# 👇 [필수] API 키를 따옴표("") 안에 넣어주세요!
-GEMINI_API_KEY = "AIzaSyC-QRPifVhQGIGCjxk2kKDC0htuyiG0fTk"
-# ==========================================
+# --- 메인 화면 설정 ---
+st.set_page_config(page_title="보안 강화 AI 공장", page_icon="🔐", layout="wide")
+st.title("🔐 3호점: 보안이 강화된 AI 쇼츠 공장")
 
-# --- 1. 🕵️‍♂️ 사용 가능한 모델 자동 탐색 함수 ---
-def get_valid_model_url():
-    """구글 서버에 물어보고, 현재 사용 가능한 최적의 모델 주소를 찾아옵니다."""
+# --- 1. 사이드바: API 키 입력 (안전 구역) ---
+with st.sidebar:
+    st.header("🔑 열쇠 보관소")
+    st.info("API 키를 코드에 적지 마세요! 해킹 당합니다.")
+    # 여기에 입력하면 안전하게 처리됩니다.
+    user_api_key = st.text_input("새로 받은 API 키를 입력하세요", type="password")
+    
+    if user_api_key:
+        st.success("키가 입력되었습니다! 작동 준비 완료.")
+    else:
+        st.warning("👈 먼저 이곳에 키를 넣어주세요.")
+
+# --- 2. 🕵️‍♂️ 모델 자동 탐색 ---
+def get_valid_model_url(api_key):
+    """입력된 키로 사용 가능한 모델을 찾아냅니다."""
     base_url = "https://generativelanguage.googleapis.com/v1beta/models"
     try:
-        # 1. 모델 목록 조회 (GET 요청)
-        response = requests.get(f"{base_url}?key={GEMINI_API_KEY}")
-        
+        response = requests.get(f"{base_url}?key={api_key}")
         if response.status_code == 200:
             models = response.json().get('models', [])
-            # 2. '글쓰기(generateContent)' 기능이 있는 모델만 필터링
-            valid_models = [
-                m['name'] for m in models 
-                if 'generateContent' in m.get('supportedGenerationMethods', [])
-            ]
+            valid_models = [m['name'] for m in models if 'generateContent' in m.get('supportedGenerationMethods', [])]
             
-            if valid_models:
-                # 3. 우리가 좋아하는 순서대로 우선순위 선택
-                preferred_order = ['models/gemini-1.5-flash', 'models/gemini-pro', 'models/gemini-1.0-pro']
-                
-                # 선호 모델이 목록에 있으면 그거 선택
-                for pref in preferred_order:
-                    if pref in valid_models:
-                        return f"https://generativelanguage.googleapis.com/v1beta/{pref}:generateContent"
-                
-                # 없으면 그냥 목록의 첫 번째 놈이라도 잡아옴 (무조건 작동 보장)
-                return f"https://generativelanguage.googleapis.com/v1beta/{valid_models[0]}:generateContent"
-        
-        return None # 목록 조회 실패 시
+            # 우선순위: 1.5-flash -> pro
+            preferred = ['models/gemini-1.5-flash', 'models/gemini-pro']
+            for p in preferred:
+                if p in valid_models:
+                    return f"https://generativelanguage.googleapis.com/v1beta/{p}:generateContent"
+            return f"https://generativelanguage.googleapis.com/v1beta/{valid_models[0]}:generateContent"
+        return None
     except:
         return None
 
-# --- 2. ⚡ AI 콘텐츠 생성 (자동 탐색 주소 사용) ---
-def generate_content_smart(topic):
-    if len(GEMINI_API_KEY) < 10 or "여기에" in GEMINI_API_KEY:
-        st.error("🚨 API 키가 입력되지 않았습니다.")
+# --- 3. ⚡ AI 콘텐츠 생성 ---
+def generate_content_safe(topic, api_key):
+    # 키가 없으면 실행 안 함
+    if not api_key:
+        st.error("좌측 사이드바에 API 키를 먼저 입력해주세요!")
         return None
 
-    # 1. 쓸 수 있는 모델 주소를 알아옴
-    target_url = get_valid_model_url()
-    
-    # 2. 만약 모델을 못 찾으면 -> 가장 기본 주소로 강제 시도 (혹시 모르니까)
+    # 모델 주소 찾기
+    target_url = get_valid_model_url(api_key)
     if not target_url:
-        target_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent"
+        target_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent"
     
-    # 3. 최종 접속 주소에다가 요청 발사!
-    full_url = f"{target_url}?key={GEMINI_API_KEY}"
+    full_url = f"{target_url}?key={api_key}"
     
     headers = {'Content-Type': 'application/json'}
     prompt = f"""
@@ -78,20 +75,17 @@ def generate_content_smart(topic):
 
     try:
         response = requests.post(full_url, headers=headers, json=data)
-        
         if response.status_code == 200:
             return response.json()['candidates'][0]['content']['parts'][0]['text']
         else:
-            # 4. 그래도 안 되면 에러 메시지 출력
             st.error(f"❌ 구글 연결 실패 ({response.status_code})")
-            st.code(response.text, language="json")
+            st.code(response.text)
             return None
-            
     except Exception as e:
         st.error(f"❌ 연결 오류: {e}")
         return None
 
-# --- 3. 🎨 이미지 생성 ---
+# --- 4. 🎨 이미지 생성 ---
 def create_ranking_image(topic, text_content):
     W, H = 1080, 1350 
     img = Image.new('RGB', (W, H), color=(0, 0, 0))
@@ -133,10 +127,7 @@ def create_ranking_image(topic, text_content):
 
     return img
 
-# --- 4. 메인 화면 ---
-st.set_page_config(page_title="스마트 AI 공장", page_icon="🧠", layout="wide")
-st.title("🧠 3호점: 스스로 모델 찾는 똑똑한 공장")
-
+# --- 5. 메인 레이아웃 ---
 if 'result_text' not in st.session_state:
     st.session_state['result_text'] = ""
 if 'img' not in st.session_state:
@@ -148,24 +139,19 @@ with col1:
     st.subheader("1. 주제 입력")
     topic = st.text_input("주제", value="2025년 대박 날 아이템 TOP 10")
     
-    if st.button("🚀 실행 (AI 자동 연결)", use_container_width=True, type="primary"):
-        with st.spinner("사용 가능한 AI 모델을 탐색 중입니다..."):
-            
-            ai_result = generate_content_smart(topic)
-            
-            if ai_result:
-                st.success("연결 성공! 이미지를 생성합니다.")
-                st.session_state['result_text'] = ai_result
-                st.session_state['img'] = create_ranking_image(topic, ai_result)
-            else:
-                pass # 에러 메시지 확인
+    if st.button("🚀 실행 (보안 모드)", use_container_width=True, type="primary"):
+        # 키가 입력되었는지 확인 후 실행
+        if user_api_key:
+            with st.spinner("안전하게 AI에 접속 중입니다..."):
+                ai_result = generate_content_safe(topic, user_api_key)
+                if ai_result:
+                    st.success("성공!")
+                    st.session_state['result_text'] = ai_result
+                    st.session_state['img'] = create_ranking_image(topic, ai_result)
+        else:
+            st.error("👈 왼쪽 사이드바에 API 키를 먼저 넣어주세요!")
 
-    # 편집창
-    edited_text = st.text_area(
-        "내용 수정", 
-        value=st.session_state['result_text'],
-        height=350
-    )
+    edited_text = st.text_area("내용 수정", value=st.session_state['result_text'], height=350)
     
     if st.button("🔄 수정사항 반영"):
         if edited_text:
