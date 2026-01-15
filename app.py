@@ -50,33 +50,58 @@ VIRAL_QUESTIONS = [
     "돈이 몰리는 곳이 정답!\n실시간 거래대금 TOP 10"
 ]
 
-# --- [3. 기능 함수들] ---
+# --- [3. 수리 완료된 데이터 수집 엔진] ---
 def get_live_stocks():
     try:
         url = "https://finance.naver.com/sise/sise_quant.naver"
-        res = requests.get(url)
+        # 🛡️ 브라우저인 것처럼 속이는 헤더 추가
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36'
+        }
+        res = requests.get(url, headers=headers, timeout=10)
+        res.encoding = 'euc-kr' # 네이버 금융 한글 깨짐 방지
+        
         soup = BeautifulSoup(res.text, 'html.parser')
-        items = soup.select('table.type_2 tr')[2:]
+        
+        # 테이블 행들을 더 정확하게 찾기
+        table = soup.find('table', class_='type_2')
+        if not table: return "데이터 테이블을 찾을 수 없습니다."
+        
+        rows = table.find_all('tr')
         data = []
-        for item in items:
-            name_tag = item.select_one('a.tltle')
+        
+        for row in rows:
+            name_tag = row.find('a', class_='tltle')
             if name_tag:
-                name = name_tag.text
-                rate_tag = item.select('td.number')[3].select_one('span')
-                if rate_tag:
-                    rate = ("+" if 'red' in str(rate_tag) else "-" if 'blue' in str(rate_tag) else "") + rate_tag.text.strip()
-                    data.append(f"{name}, {rate}")
+                name = name_tag.text.strip()
+                # 해당 줄의 숫자 데이터들(td.number) 찾기
+                tds = row.find_all('td', class_='number')
+                if len(tds) >= 4:
+                    # 등락률은 보통 4번째 숫자 열에 있음
+                    rate_span = tds[3].find('span')
+                    if rate_span:
+                        rate_text = rate_span.text.strip()
+                        # 상승/하락에 따른 기호 추가
+                        cls = rate_span.get('class', [])
+                        prefix = ""
+                        if 'red02' in cls or 'red01' in cls: prefix = "+"
+                        elif 'blue02' in cls or 'blue01' in cls: prefix = "-"
+                        
+                        data.append(f"{name}, {prefix}{rate_text}")
+            
             if len(data) >= 10: break
-        return "\n".join(data)
-    except: return "데이터 로드 실패"
+            
+        return "\n".join(data) if data else "종목 데이터를 찾지 못했습니다."
+    except Exception as e:
+        return f"연결 오류 발생: {str(e)}"
 
+# --- [기타 이미지/영상 엔진은 동일] ---
 def get_font(size):
     return ImageFont.truetype(FONT_FILE, size) if os.path.exists(FONT_FILE) else ImageFont.load_default()
 
 def create_image(data_list, d):
     canvas = Image.new('RGB', (1080, 1920), d['bg_color'])
     draw = ImageDraw.Draw(canvas)
-    # 디자인 로직 (기존과 동일)
     draw.rectangle([(0, 0), (1080, d['top_h'])], fill=d['top_bg'])
     draw.text((540, (d['top_h']/2)+d['top_y_adj']), d['top_text'], font=get_font(d['top_fs']), fill=d['top_color'], anchor="mm", align="center", spacing=20)
     sub_y = d['top_h'] + 30
@@ -86,7 +111,8 @@ def create_image(data_list, d):
     for i, line in enumerate(data_list):
         if i >= 10: break
         p = line.split(',')
-        name, rate = p[0].strip(), p[1].strip() if len(p)>1 else ""
+        if len(p) < 2: continue
+        name, rate = p[0].strip(), p[1].strip()
         cur_y = start_y + (i * d['row_h'])
         if i % 2 == 0: draw.rectangle([(50, cur_y - 50), (1030, cur_y + 50)], fill="#1A1A1A")
         draw.text((120, cur_y), f"{i+1}", font=get_font(d['item_fs']), fill="#FFFFFF", anchor="mm")
@@ -97,31 +123,21 @@ def create_image(data_list, d):
     draw.text((540, 1920-125), d['bot_text'], font=get_font(45), fill="#FFFF00", anchor="mm", align="center")
     return canvas
 
-# --- [4. 영상 제작 엔진 (핵심 신기능)] ---
 def make_video(image, text):
     img_path = os.path.join(TEMP_DIR, "frame.jpg")
     audio_path = os.path.join(TEMP_DIR, "voice.mp3")
     output_path = os.path.join(TEMP_DIR, "shorts_output.mp4")
-    
-    # 1. 이미지 임시 저장
     image.save(img_path)
-    
-    # 2. AI 음성 생성 (TTS)
     tts = gTTS(text=text.replace("\n", " "), lang='ko')
     tts.save(audio_path)
-    
-    # 3. 비디오 클립 생성 (기본 8초)
     audio = AudioFileClip(audio_path)
-    duration = max(8, audio.duration + 1) # 음성 길이에 맞춤
-    
+    duration = max(8, audio.duration + 1)
     clip = ImageClip(img_path).set_duration(duration)
     clip = clip.set_audio(audio)
-    
-    # 4. 파일 출력 (속도를 위해 오디오 코덱 지정)
     clip.write_videofile(output_path, fps=24, codec="libx264", audio_codec="aac")
     return output_path
 
-# --- [5. UI] ---
+# --- [4. UI] ---
 st.title("💰 3호점: 경제 쇼츠 자동 완성 공장")
 col_L, col_R = st.columns([1, 1.2])
 
@@ -143,7 +159,7 @@ with col_L:
         row_h = st.slider("간격", 50, 250, 120)
         item_fs = st.slider("리스트", 20, 100, 55)
 
-    design = {'bg_color': "#000000", 'top_text': top_text, 'top_h': top_h, 'top_fs': top_fs, 'top_lh': 20, 'top_y_adj': top_y_adj, 'top_bg': "#FFFF00", 'top_color': "#000000", 'sub_text': "실시간 거래대금 TOP 10", 'row_h': row_h, 'item_fs': item_fs, 'bot_text': "인물을 두번 톡톡 누르고,\n댓글 남겨주세요!!"}
+    design = {'bg_color': "#000000", 'top_text': top_text, 'top_h': top_h, 'top_fs': top_fs, 'top_lh': 20, 'top_y_adj': top_y_adj, 'top_bg': "#FFFF00", 'top_color': "#000000", 'sub_text': "실시간 거래대금 TOP 10", 'row_h': row_h, 'item_fs': item_fs, 'bot_text': "구독과 좋아요를 누르면\n자산이 2배로 늘어납니다!"}
 
 with col_R:
     st.subheader("🖼️ 미리보기 & 영상 제작")
