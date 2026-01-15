@@ -1,0 +1,6 @@
+streamlit
+pillow
+requests
+beautifulsoup4
+gTTS
+moviepy==1.0.3
