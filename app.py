@@ -3,165 +3,166 @@ from PIL import Image, ImageDraw, ImageFont
 import textwrap
 import io
 import requests
-import json
+from bs4 import BeautifulSoup
 
 # --- 메인 화면 설정 ---
-st.set_page_config(page_title="보안 강화 AI 공장", page_icon="🔐", layout="wide")
-st.title("🔐 3호점: 보안이 강화된 AI 쇼츠 공장")
+st.set_page_config(page_title="큰손 수급 추적기", page_icon="💸", layout="wide")
+st.title("💸 3호점: 외국인/기관 순매수 TOP 10")
 
-# --- 1. 사이드바: API 키 입력 (안전 구역) ---
-with st.sidebar:
-    st.header("🔑 열쇠 보관소")
-    st.info("API 키를 코드에 적지 마세요! 해킹 당합니다.")
-    # 여기에 입력하면 안전하게 처리됩니다.
-    user_api_key = st.text_input("새로 받은 API 키를 입력하세요", type="password")
-    
-    if user_api_key:
-        st.success("키가 입력되었습니다! 작동 준비 완료.")
-    else:
-        st.warning("👈 먼저 이곳에 키를 넣어주세요.")
-
-# --- 2. 🕵️‍♂️ 모델 자동 탐색 ---
-def get_valid_model_url(api_key):
-    """입력된 키로 사용 가능한 모델을 찾아냅니다."""
-    base_url = "https://generativelanguage.googleapis.com/v1beta/models"
-    try:
-        response = requests.get(f"{base_url}?key={api_key}")
-        if response.status_code == 200:
-            models = response.json().get('models', [])
-            valid_models = [m['name'] for m in models if 'generateContent' in m.get('supportedGenerationMethods', [])]
-            
-            # 우선순위: 1.5-flash -> pro
-            preferred = ['models/gemini-1.5-flash', 'models/gemini-pro']
-            for p in preferred:
-                if p in valid_models:
-                    return f"https://generativelanguage.googleapis.com/v1beta/{p}:generateContent"
-            return f"https://generativelanguage.googleapis.com/v1beta/{valid_models[0]}:generateContent"
-        return None
-    except:
-        return None
-
-# --- 3. ⚡ AI 콘텐츠 생성 ---
-def generate_content_safe(topic, api_key):
-    # 키가 없으면 실행 안 함
-    if not api_key:
-        st.error("좌측 사이드바에 API 키를 먼저 입력해주세요!")
-        return None
-
-    # 모델 주소 찾기
-    target_url = get_valid_model_url(api_key)
-    if not target_url:
-        target_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent"
-    
-    full_url = f"{target_url}?key={api_key}"
-    
-    headers = {'Content-Type': 'application/json'}
-    prompt = f"""
-    주제: '{topic}'
-    위 주제에 대해 가장 인기 있는 TOP 10 랭킹을 작성해.
-    
-    [작성 규칙]
-    1. 인터넷 검색하지 말고 네가 아는 정보를 바탕으로 써.
-    2. 설명은 20자 이내로 짧고 강렬하게.
-    3. 서론, 결론, 인사말 절대 금지. 오직 리스트만 출력해.
-    
-    [출력 포맷]
-    1. 항목명 - 핵심설명
-    2. 항목명 - 핵심설명
-    ...
+# --- 1. 네이버 금융 '투자자별 순매수' 크롤링 ---
+def get_investor_rank(investor_type):
     """
+    네이버 금융에서 외국인/기관 순매수 상위 종목을 긁어옵니다.
+    investor_type: '9000'(외국인) 또는 '1000'(기관)
+    """
+    url = f"https://finance.naver.com/sise/sise_deal_rank.naver?investor_gubun={investor_type}"
     
-    data = {"contents": [{"parts": [{"text": prompt}]}]}
-
     try:
-        response = requests.post(full_url, headers=headers, json=data)
-        if response.status_code == 200:
-            return response.json()['candidates'][0]['content']['parts'][0]['text']
-        else:
-            st.error(f"❌ 구글 연결 실패 ({response.status_code})")
-            st.code(response.text)
+        response = requests.get(url)
+        response.encoding = 'euc-kr' # 한글 깨짐 방지
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # 순매수 테이블 찾기
+        tables = soup.find_all('table', {'class': 'type_2'})
+        if not tables:
             return None
-    except Exception as e:
-        st.error(f"❌ 연결 오류: {e}")
-        return None
+            
+        # 보통 첫번째 테이블이 코스피, 두번째가 코스닥 등임. 여기선 '코스피' 기준(첫번째)
+        target_table = tables[0]
+        rows = target_table.find_all('tr')
+        
+        data_list = []
+        count = 0
+        
+        for row in rows:
+            cols = row.find_all('td')
+            # 유효한 데이터 행인지 확인 (순위가 있는 행)
+            if len(cols) > 3 and cols[0].get_text(strip=True).isdigit():
+                rank = cols[0].get_text(strip=True)
+                name = cols[1].get_text(strip=True)
+                # 순매수 대금 (단위: 억 등 사이트 기준) - 보통 3번째 칸이 가격, 4~5번째가 순매수량 등 변동 가능
+                # 네이버 '순매수 상위' 페이지 기준: [순위, 종목명, 현재가, 전일비, 등락률, 순매수량(추정)]
+                # 정확한 금액 데이터 추출
+                amount = cols[5].get_text(strip=True) # 순매수량/금액
+                
+                data_list.append((rank, name, amount))
+                count += 1
+                if count == 10:
+                    break
+                    
+        return data_list
 
-# --- 4. 🎨 이미지 생성 ---
-def create_ranking_image(topic, text_content):
+    except Exception as e:
+        return []
+
+# --- 2. 🎨 이미지 생성 (검은색 배경 + 전문가 스타일 테이블) ---
+def create_dark_table_image(title, data_list):
     W, H = 1080, 1350 
-    img = Image.new('RGB', (W, H), color=(0, 0, 0))
+    # 1. 배경: 완전 검은색 (전문가 느낌)
+    img = Image.new('RGB', (W, H), color=(10, 10, 10)) 
     draw = ImageDraw.Draw(img)
 
     try:
-        font_title = ImageFont.truetype("NanumGothic-ExtraBold.ttf", 70) 
-        font_list = ImageFont.truetype("NanumGothic-ExtraBold.ttf", 40)
+        # 폰트 로드 (굵은 고딕체 필수)
+        font_header = ImageFont.truetype("NanumGothic-ExtraBold.ttf", 70) 
+        font_col_head = ImageFont.truetype("NanumGothic-ExtraBold.ttf", 40)
+        font_row = ImageFont.truetype("NanumGothic-ExtraBold.ttf", 45)
+        font_rank = ImageFont.truetype("NanumGothic-ExtraBold.ttf", 50)
     except:
-        font_title = ImageFont.load_default()
-        font_list = ImageFont.load_default()
+        font_header = ImageFont.load_default()
+        font_col_head = ImageFont.load_default()
+        font_row = ImageFont.load_default()
+        font_rank = ImageFont.load_default()
 
-    draw.rectangle([(0,0), (W, H)], outline=(255, 0, 0), width=15)
-    draw.line([(0, 250), (W, 250)], fill=(255, 0, 0), width=5)
+    # 2. 상단 헤더 디자인
+    # 빨간색/파란색 포인트 선
+    draw.rectangle([(0, 0), (W, 250)], fill=(20, 20, 20)) # 상단 박스
+    draw.line([(50, 240), (W-50, 240)], fill=(255, 50, 50), width=5) # 빨간 줄
 
-    para = textwrap.wrap(topic, width=16)
-    current_h = 80
-    for line in para:
-        bbox = draw.textbbox((0, 0), line, font=font_title)
-        text_w = bbox[2] - bbox[0]
-        draw.text(((W - text_w) / 2, current_h), line, font=font_title, fill="white")
-        current_h += 80
+    # 제목 표시
+    bbox = draw.textbbox((0, 0), title, font=font_header)
+    text_w = bbox[2] - bbox[0]
+    draw.text(((W - text_w) / 2, 80), title, font=font_header, fill="white")
 
-    lines = text_content.strip().split('\n')
-    start_y = 350
+    # 3. 테이블 컬럼명 (순위 | 종목명 | 순매수)
+    start_y = 300
+    # 컬럼 배경
+    draw.rectangle([(50, start_y), (W-50, start_y+80)], fill=(50, 50, 50))
+    
+    draw.text((100, start_y+15), "순위", font=font_col_head, fill=(200, 200, 200))
+    draw.text((350, start_y+15), "종목명", font=font_col_head, fill=(200, 200, 200))
+    draw.text((800, start_y+15), "순매수(주/금액)", font=font_col_head, fill=(200, 200, 200))
+
+    # 4. 데이터 리스트 그리기
+    current_y = 400
     gap = 90
     
-    count = 0
-    for line in lines:
-        clean = line.strip()
-        if not clean: continue
-        if clean[0].isdigit():
-            count += 1
-            if count > 10: break
-            if len(clean) > 28: clean = clean[:28] + "..."
-            color = (255, 215, 0) if count <= 3 else "white"
-            draw.text((80, start_y), clean, font=font_list, fill=color)
-            start_y += gap
+    for rank, name, amount in data_list:
+        # 순위 (노란색 강조)
+        draw.text((110, current_y), rank, font=font_rank, fill=(255, 215, 0))
+        
+        # 종목명 (흰색)
+        draw.text((350, current_y), name, font=font_row, fill="white")
+        
+        # 순매수량 (빨간색 = 매수 우위 상징)
+        draw.text((800, current_y), amount, font=font_row, fill=(255, 80, 80))
+        
+        # 밑줄 (얇은 회색)
+        draw.line([(50, current_y + 70), (W-50, current_y + 70)], fill=(50, 50, 50), width=2)
+        
+        current_y += gap
+
+    # 5. 하단 워터마크
+    footer = "구독 & 좋아요 ❤️"
+    bbox_foot = draw.textbbox((0, 0), footer, font=font_col_head)
+    draw.text(((W - (bbox_foot[2] - bbox_foot[0]))/2, H - 150), footer, font=font_col_head, fill="white")
 
     return img
 
-# --- 5. 메인 레이아웃 ---
-if 'result_text' not in st.session_state:
-    st.session_state['result_text'] = ""
+# --- 3. 메인 화면 로직 ---
 if 'img' not in st.session_state:
     st.session_state['img'] = None
 
 col1, col2 = st.columns([1, 1])
 
 with col1:
-    st.subheader("1. 주제 입력")
-    topic = st.text_input("주제", value="2025년 대박 날 아이템 TOP 10")
+    st.header("🔍 데이터 선택")
+    st.info("AI가 아니라 '네이버 금융' 실데이터를 긁어옵니다.")
     
-    if st.button("🚀 실행 (보안 모드)", use_container_width=True, type="primary"):
-        # 키가 입력되었는지 확인 후 실행
-        if user_api_key:
-            with st.spinner("안전하게 AI에 접속 중입니다..."):
-                ai_result = generate_content_safe(topic, user_api_key)
-                if ai_result:
-                    st.success("성공!")
-                    st.session_state['result_text'] = ai_result
-                    st.session_state['img'] = create_ranking_image(topic, ai_result)
-        else:
-            st.error("👈 왼쪽 사이드바에 API 키를 먼저 넣어주세요!")
-
-    edited_text = st.text_area("내용 수정", value=st.session_state['result_text'], height=350)
+    # 선택 상자 (외국인 vs 기관)
+    option = st.selectbox(
+        "누구의 장바구니를 훔쳐볼까요?",
+        ("외국인 순매수 TOP 10", "기관 순매수 TOP 10")
+    )
     
-    if st.button("🔄 수정사항 반영"):
-        if edited_text:
-            st.session_state['img'] = create_ranking_image(topic, edited_text)
-            st.success("완료!")
+    if st.button("🚀 데이터 수집 및 표 생성", use_container_width=True, type="primary"):
+        with st.spinner("네이버 금융에 접속해서 데이터를 가져오는 중..."):
+            
+            # 네이버 파라미터 설정
+            if "외국인" in option:
+                code = "9000" # 외국인 코드
+                title_text = "외국인 순매수 TOP 10"
+            else:
+                code = "1000" # 기관 코드
+                title_text = "기관 순매수 TOP 10"
+                
+            # 1. 크롤링
+            rank_data = get_investor_rank(code)
+            
+            if rank_data:
+                # 2. 이미지 생성
+                st.session_state['img'] = create_dark_table_image(title_text, rank_data)
+                st.success("생성 완료! 오른쪽을 확인하세요.")
+            else:
+                st.error("데이터를 가져오지 못했습니다. 장 운영 시간이 아닐 수 있습니다.")
 
 with col2:
-    st.subheader("🖼️ 결과물")
+    st.subheader("🖼️ 완성된 디자인")
     if st.session_state['img']:
-        st.image(st.session_state['img'], caption="결과", use_container_width=True)
+        st.image(st.session_state['img'], caption="최종 결과물", use_container_width=True)
+        
         buf = io.BytesIO()
         st.session_state['img'].save(buf, format="PNG")
-        st.download_button("💾 다운로드", buf.getvalue(), "result.png", "image/png", use_container_width=True)
+        st.download_button("💾 이미지 저장", buf.getvalue(), "investor_ranking.png", "image/png", use_container_width=True)
+    else:
+        st.info("왼쪽에서 버튼을 누르면 표가 만들어집니다.")
