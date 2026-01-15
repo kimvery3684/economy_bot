@@ -10,7 +10,7 @@ import google.generativeai as genai
 
 # ==========================================
 # 👇 여기에 제미나이 API 키를 입력하세요!
-GEMINI_API_KEY = "AIzaSyC-QRPifVhQGIGCjxk2kKDC0htuyiG0fTk"
+GEMINI_API_KEY = "여기에_본인의_API_키를_붙여넣으세요"
 # ==========================================
 
 # --- 1. 네이버 검색 함수 ---
