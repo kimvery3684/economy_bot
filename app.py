@@ -50,63 +50,75 @@ VIRAL_QUESTIONS = [
     "돈이 몰리는 곳이 정답!\n실시간 거래대금 TOP 10"
 ]
 
-# --- [3. 수리 완료된 데이터 수집 엔진] ---
+# --- [3. 수리 완료된 데이터 수집 엔진 (안정성 강화)] ---
 def get_live_stocks():
     try:
         url = "https://finance.naver.com/sise/sise_quant.naver"
-        # 🛡️ 브라우저인 것처럼 속이는 헤더 추가
+        # 🛡️ 서버 차단을 피하기 위한 더 강력한 헤더
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7'
         }
-        res = requests.get(url, headers=headers, timeout=10)
-        res.encoding = 'euc-kr' # 네이버 금융 한글 깨짐 방지
+        res = requests.get(url, headers=headers, timeout=15)
+        # 네이버 금융 특유의 EUC-KR 인코딩 강제 설정
+        res.encoding = 'euc-kr' 
         
         soup = BeautifulSoup(res.text, 'html.parser')
         
-        # 테이블 행들을 더 정확하게 찾기
-        table = soup.find('table', class_='type_2')
-        if not table: return "데이터 테이블을 찾을 수 없습니다."
+        # 종목명이 들어있는 a태그들 찾기
+        names = soup.select('table.type_2 a.tltle')
+        # 등락률이 들어있는 span태그들 찾기
+        rates = soup.select('table.type_2 td.number span.tah')
         
-        rows = table.find_all('tr')
-        data = []
+        # 등락률 필터링 (상승률 데이터만 추출)
+        final_rates = []
+        for r in rates:
+            txt = r.text.strip()
+            if '%' in txt:
+                # 색상 클래스로 부호 결정
+                cls = r.get('class', [])
+                prefix = ""
+                if 'red01' in cls or 'red02' in cls: prefix = "+"
+                elif 'blue01' in cls or 'blue02' in cls: prefix = "-"
+                final_rates.append(prefix + txt)
+
+        stock_data = []
+        for i in range(min(len(names), 10)):
+            name = names[i].text.strip()
+            rate = final_rates[i] if i < len(final_rates) else "0.00%"
+            stock_data.append(f"{name}, {rate}")
+            
+        if not stock_data:
+            return "데이터 수집 실패: 페이지 구조가 변경되었거나 접근이 차단되었습니다."
+            
+        return "\n".join(stock_data)
         
-        for row in rows:
-            name_tag = row.find('a', class_='tltle')
-            if name_tag:
-                name = name_tag.text.strip()
-                # 해당 줄의 숫자 데이터들(td.number) 찾기
-                tds = row.find_all('td', class_='number')
-                if len(tds) >= 4:
-                    # 등락률은 보통 4번째 숫자 열에 있음
-                    rate_span = tds[3].find('span')
-                    if rate_span:
-                        rate_text = rate_span.text.strip()
-                        # 상승/하락에 따른 기호 추가
-                        cls = rate_span.get('class', [])
-                        prefix = ""
-                        if 'red02' in cls or 'red01' in cls: prefix = "+"
-                        elif 'blue02' in cls or 'blue01' in cls: prefix = "-"
-                        
-                        data.append(f"{name}, {prefix}{rate_text}")
-            
-            if len(data) >= 10: break
-            
-        return "\n".join(data) if data else "종목 데이터를 찾지 못했습니다."
     except Exception as e:
         return f"연결 오류 발생: {str(e)}"
 
-# --- [기타 이미지/영상 엔진은 동일] ---
+# --- [기타 이미지/영상 엔진] ---
 def get_font(size):
-    return ImageFont.truetype(FONT_FILE, size) if os.path.exists(FONT_FILE) else ImageFont.load_default()
+    try:
+        return ImageFont.truetype(FONT_FILE, size)
+    except:
+        return ImageFont.load_default()
 
 def create_image(data_list, d):
     canvas = Image.new('RGB', (1080, 1920), d['bg_color'])
     draw = ImageDraw.Draw(canvas)
+    
+    # 상단바
     draw.rectangle([(0, 0), (1080, d['top_h'])], fill=d['top_bg'])
-    draw.text((540, (d['top_h']/2)+d['top_y_adj']), d['top_text'], font=get_font(d['top_fs']), fill=d['top_color'], anchor="mm", align="center", spacing=20)
+    try:
+        draw.text((540, (d['top_h']/2)+d['top_y_adj']), d['top_text'], font=get_font(d['top_fs']), fill=d['top_color'], anchor="mm", align="center", spacing=20)
+    except: pass
+    
+    # 소제목 노란바
     sub_y = d['top_h'] + 30
     draw.rectangle([(50, sub_y), (1030, sub_y + 100)], fill="#FFFF00")
     draw.text((540, sub_y + 50), d['sub_text'], font=get_font(50), fill="#000000", anchor="mm")
+    
+    # 리스트 데이터 출력
     start_y = sub_y + 180
     for i, line in enumerate(data_list):
         if i >= 10: break
@@ -114,11 +126,15 @@ def create_image(data_list, d):
         if len(p) < 2: continue
         name, rate = p[0].strip(), p[1].strip()
         cur_y = start_y + (i * d['row_h'])
+        
         if i % 2 == 0: draw.rectangle([(50, cur_y - 50), (1030, cur_y + 50)], fill="#1A1A1A")
+        
         draw.text((120, cur_y), f"{i+1}", font=get_font(d['item_fs']), fill="#FFFFFF", anchor="mm")
         draw.text((250, cur_y), name, font=get_font(d['item_fs']), fill="#FFFFFF", anchor="lm")
+        
         color = "#FF3333" if "+" in rate else "#3388FF" if "-" in rate else "#FFFFFF"
         draw.text((950, cur_y), rate, font=get_font(d['item_fs']), fill=color, anchor="rm")
+        
     draw.rectangle([(0, 1920-250), (1080, 1920)], fill="#000000")
     draw.text((540, 1920-125), d['bot_text'], font=get_font(45), fill="#FFFF00", anchor="mm", align="center")
     return canvas
@@ -131,9 +147,7 @@ def make_video(image, text):
     tts = gTTS(text=text.replace("\n", " "), lang='ko')
     tts.save(audio_path)
     audio = AudioFileClip(audio_path)
-    duration = max(8, audio.duration + 1)
-    clip = ImageClip(img_path).set_duration(duration)
-    clip = clip.set_audio(audio)
+    clip = ImageClip(img_path).set_duration(max(8, audio.duration + 1)).set_audio(audio)
     clip.write_videofile(output_path, fps=24, codec="libx264", audio_codec="aac")
     return output_path
 
@@ -141,15 +155,23 @@ def make_video(image, text):
 st.title("💰 3호점: 경제 쇼츠 자동 완성 공장")
 col_L, col_R = st.columns([1, 1.2])
 
+if 'q' not in st.session_state: st.session_state.q = VIRAL_QUESTIONS[0]
+if 'd' not in st.session_state: st.session_state.d = ""
+
 with col_L:
     with st.container(border=True):
         st.subheader("1. 콘텐츠 자동 생성")
         if st.button("🎲 랜덤 주제 & 실시간 데이터 동기화", type="primary", use_container_width=True):
-            st.session_state.q = random.choice(VIRAL_QUESTIONS)
-            st.session_state.d = get_live_stocks()
+            with st.spinner("데이터 수집 중..."):
+                st.session_state.q = random.choice(VIRAL_QUESTIONS)
+                st.session_state.d = get_live_stocks()
+            if "오류" in st.session_state.d or "실패" in st.session_state.d:
+                st.error(st.session_state.d)
+            else:
+                st.success("데이터 동기화 완료!")
         
-        top_text = st.text_area("제목", st.session_state.get('q', VIRAL_QUESTIONS[0]), height=100)
-        data_input = st.text_area("데이터", st.session_state.get('d', ""), height=150)
+        top_text = st.text_area("제목", st.session_state.q, height=100)
+        data_input = st.text_area("데이터 (종목명, 등락률)", st.session_state.d, height=150)
         data_list = [l.strip() for l in data_input.split('\n') if l.strip()]
 
     with st.expander("2. 디자인 조절 (최적값 고정)"):
@@ -163,14 +185,14 @@ with col_L:
 
 with col_R:
     st.subheader("🖼️ 미리보기 & 영상 제작")
-    if data_list:
+    if data_list and "오류" not in data_list[0] and "실패" not in data_list[0]:
         final_img = create_image(data_list, design)
         st.image(final_img, use_container_width=True)
-        
         st.write("---")
-        if st.button("🎬 MP4 영상 파일로 만들기 (AI 음성 포함)", use_container_width=True):
-            with st.spinner("영상 제작 중... (약 10~20초 소요)"):
+        if st.button("🎬 MP4 영상 파일로 만들기", use_container_width=True):
+            with st.spinner("영상 제작 중..."):
                 video_file = make_video(final_img, top_text)
                 with open(video_file, "rb") as f:
-                    st.download_button("💾 완성된 영상 다운로드 (.mp4)", f, "economy_shorts.mp4", "video/mp4", use_container_width=True)
-                st.success("영상 제작 완료!")
+                    st.download_button("💾 완성된 영상 다운로드", f, "economy_shorts.mp4", "video/mp4", use_container_width=True)
+    else:
+        st.info("데이터가 없습니다. 왼쪽 버튼을 눌러 동기화하세요.")
