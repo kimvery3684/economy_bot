@@ -6,6 +6,9 @@ from bs4 import BeautifulSoup
 from io import BytesIO
 import random
 from gtts import gTTS
+# moviepy 설정: 서버(Linux) 환경에서 ImageMagick 에러를 방지하기 위해 설정을 변경합니다.
+from moviepy.config import change_settings
+change_settings({"IMAGEMAGICK_BINARY": "/usr/bin/convert"}) 
 from moviepy.editor import ImageClip, AudioFileClip
 
 # --- [1. 기본 설정 및 폴더 준비] ---
@@ -50,32 +53,26 @@ VIRAL_QUESTIONS = [
     "돈이 몰리는 곳이 정답!\n실시간 거래대금 TOP 10"
 ]
 
-# --- [3. 수리 완료된 데이터 수집 엔진 (안정성 강화)] ---
+# --- [3. 초강력 데이터 수집 엔진] ---
 def get_live_stocks():
     try:
         url = "https://finance.naver.com/sise/sise_quant.naver"
-        # 🛡️ 서버 차단을 피하기 위한 더 강력한 헤더
+        session = requests.Session()
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7'
+            'Referer': 'https://finance.naver.com/'
         }
-        res = requests.get(url, headers=headers, timeout=15)
-        # 네이버 금융 특유의 EUC-KR 인코딩 강제 설정
+        res = session.get(url, headers=headers, timeout=15)
         res.encoding = 'euc-kr' 
         
         soup = BeautifulSoup(res.text, 'html.parser')
-        
-        # 종목명이 들어있는 a태그들 찾기
         names = soup.select('table.type_2 a.tltle')
-        # 등락률이 들어있는 span태그들 찾기
         rates = soup.select('table.type_2 td.number span.tah')
         
-        # 등락률 필터링 (상승률 데이터만 추출)
         final_rates = []
         for r in rates:
             txt = r.text.strip()
             if '%' in txt:
-                # 색상 클래스로 부호 결정
                 cls = r.get('class', [])
                 prefix = ""
                 if 'red01' in cls or 'red02' in cls: prefix = "+"
@@ -88,37 +85,23 @@ def get_live_stocks():
             rate = final_rates[i] if i < len(final_rates) else "0.00%"
             stock_data.append(f"{name}, {rate}")
             
-        if not stock_data:
-            return "데이터 수집 실패: 페이지 구조가 변경되었거나 접근이 차단되었습니다."
-            
-        return "\n".join(stock_data)
+        return "\n".join(stock_data) if stock_data else "데이터를 찾을 수 없습니다. 잠시 후 다시 시도하세요."
         
     except Exception as e:
-        return f"연결 오류 발생: {str(e)}"
+        return f"서버 연결 실패: {str(e)}"
 
-# --- [기타 이미지/영상 엔진] ---
+# --- [4. 이미지 및 영상 엔진] ---
 def get_font(size):
-    try:
-        return ImageFont.truetype(FONT_FILE, size)
-    except:
-        return ImageFont.load_default()
+    return ImageFont.truetype(FONT_FILE, size) if os.path.exists(FONT_FILE) else ImageFont.load_default()
 
 def create_image(data_list, d):
     canvas = Image.new('RGB', (1080, 1920), d['bg_color'])
     draw = ImageDraw.Draw(canvas)
-    
-    # 상단바
     draw.rectangle([(0, 0), (1080, d['top_h'])], fill=d['top_bg'])
-    try:
-        draw.text((540, (d['top_h']/2)+d['top_y_adj']), d['top_text'], font=get_font(d['top_fs']), fill=d['top_color'], anchor="mm", align="center", spacing=20)
-    except: pass
-    
-    # 소제목 노란바
+    draw.text((540, (d['top_h']/2)+d['top_y_adj']), d['top_text'], font=get_font(d['top_fs']), fill=d['top_color'], anchor="mm", align="center", spacing=20)
     sub_y = d['top_h'] + 30
     draw.rectangle([(50, sub_y), (1030, sub_y + 100)], fill="#FFFF00")
-    draw.text((540, sub_y + 50), d['sub_text'], font=get_font(50), fill="#000000", anchor="mm")
-    
-    # 리스트 데이터 출력
+    draw.text((540, sub_y + 50), "실시간 거래대금 TOP 10", font=get_font(50), fill="#000000", anchor="mm")
     start_y = sub_y + 180
     for i, line in enumerate(data_list):
         if i >= 10: break
@@ -126,15 +109,11 @@ def create_image(data_list, d):
         if len(p) < 2: continue
         name, rate = p[0].strip(), p[1].strip()
         cur_y = start_y + (i * d['row_h'])
-        
         if i % 2 == 0: draw.rectangle([(50, cur_y - 50), (1030, cur_y + 50)], fill="#1A1A1A")
-        
         draw.text((120, cur_y), f"{i+1}", font=get_font(d['item_fs']), fill="#FFFFFF", anchor="mm")
         draw.text((250, cur_y), name, font=get_font(d['item_fs']), fill="#FFFFFF", anchor="lm")
-        
         color = "#FF3333" if "+" in rate else "#3388FF" if "-" in rate else "#FFFFFF"
         draw.text((950, cur_y), rate, font=get_font(d['item_fs']), fill=color, anchor="rm")
-        
     draw.rectangle([(0, 1920-250), (1080, 1920)], fill="#000000")
     draw.text((540, 1920-125), d['bot_text'], font=get_font(45), fill="#FFFF00", anchor="mm", align="center")
     return canvas
@@ -151,7 +130,7 @@ def make_video(image, text):
     clip.write_videofile(output_path, fps=24, codec="libx264", audio_codec="aac")
     return output_path
 
-# --- [4. UI] ---
+# --- [5. UI] ---
 st.title("💰 3호점: 경제 쇼츠 자동 완성 공장")
 col_L, col_R = st.columns([1, 1.2])
 
@@ -165,10 +144,8 @@ with col_L:
             with st.spinner("데이터 수집 중..."):
                 st.session_state.q = random.choice(VIRAL_QUESTIONS)
                 st.session_state.d = get_live_stocks()
-            if "오류" in st.session_state.d or "실패" in st.session_state.d:
-                st.error(st.session_state.d)
-            else:
-                st.success("데이터 동기화 완료!")
+            if "실패" in st.session_state.d: st.error(st.session_state.d)
+            else: st.success("데이터 동기화 완료!")
         
         top_text = st.text_area("제목", st.session_state.q, height=100)
         data_input = st.text_area("데이터 (종목명, 등락률)", st.session_state.d, height=150)
@@ -181,11 +158,11 @@ with col_L:
         row_h = st.slider("간격", 50, 250, 120)
         item_fs = st.slider("리스트", 20, 100, 55)
 
-    design = {'bg_color': "#000000", 'top_text': top_text, 'top_h': top_h, 'top_fs': top_fs, 'top_lh': 20, 'top_y_adj': top_y_adj, 'top_bg': "#FFFF00", 'top_color': "#000000", 'sub_text': "실시간 거래대금 TOP 10", 'row_h': row_h, 'item_fs': item_fs, 'bot_text': "구독과 좋아요를 누르면\n자산이 2배로 늘어납니다!"}
+    design = {'bg_color': "#000000", 'top_text': top_text, 'top_h': top_h, 'top_fs': top_fs, 'top_lh': 20, 'top_y_adj': top_y_adj, 'top_bg': "#FFFF00", 'top_color': "#000000", 'row_h': row_h, 'item_fs': item_fs, 'bot_text': "구독과 좋아요를 누르면\n자산이 2배로 늘어납니다!"}
 
 with col_R:
     st.subheader("🖼️ 미리보기 & 영상 제작")
-    if data_list and "오류" not in data_list[0] and "실패" not in data_list[0]:
+    if data_list and "데이터" not in data_list[0] and "실패" not in data_list[0]:
         final_img = create_image(data_list, design)
         st.image(final_img, use_container_width=True)
         st.write("---")
