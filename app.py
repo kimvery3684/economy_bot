@@ -9,9 +9,8 @@ import google.generativeai as genai
 GEMINI_API_KEY = "AIzaSyC-QRPifVhQGIGCjxk2kKDC0htuyiG0fTk"
 # ==========================================
 
-# --- 1. 🧠 제미나이 순수 창작 함수 (검색 X, 지식 기반 O) ---
+# --- 1. 🧠 제미나이 순수 창작 함수 (팩트 검증 프롬프트 탑재) ---
 def generate_pure_content(topic):
-    # 키 입력 확인
     if len(GEMINI_API_KEY) < 10 or "여기에" in GEMINI_API_KEY:
         st.error("🚨 API 키가 입력되지 않았습니다. 코드 상단을 확인해주세요.")
         return None
@@ -19,26 +18,33 @@ def generate_pure_content(topic):
     try:
         genai.configure(api_key=GEMINI_API_KEY)
         
-        # 전문가 페르소나 부여
+        # 🔥 [핵심] 사장님이 지시하신 '팩트 체크' 명령어를 강력하게 입력
         prompt = f"""
-        너는 유튜브 쇼츠 콘텐츠를 전문으로 만드는 '천재 작가'야.
+        너는 데이터에 집착하는 '팩트 폭격기' 유튜브 쇼츠 작가야.
         주제: '{topic}'
         
-        위 주제에 대해 사람들이 가장 흥미로워할 만한 **TOP 10 랭킹**을 너의 지식을 총동원해서 작성해.
+        위 주제로 TOP 10 랭킹을 작성하되, 아래 **[엄격한 검증 규칙]**을 헌법처럼 지켜라.
         
-        [작성 규칙]
-        1. 뻔한 내용보다는 구체적이고 흥미로운 항목 위주로 구성해.
-        2. 설명은 20자 이내로 짧고 강렬하게 (유튜브 시청자가 읽기 쉽게).
-        3. 서론, 결론, 인사말 절대 금지. 오직 리스트만 출력해.
+        [🚫 검증 및 선정 기준 (절대 준수)]
+        1. **객관적 사실(Fact) 원칙**: 구글/위키피디아/국제 언론/공식 통계 자료 등에서 교차 검증된 정보만 사용해.
+        2. **출처 제한**: 출처가 불분명하거나, 주장에 가까운 정보, 개인 블로그/커뮤니티 썰은 절대 제외해.
+        3. **명확한 정의**: 기준이 명확한 수치, 연도, 기록, 공식 명칭으로 딱 떨어지는 항목만 선정해.
+        4. **선정 성격 (아래 중 하나 필수)**:
+           - 숫자로 명확히 비교 가능한 극단성 (면적, 높이, 길이, 금액, 인원 수 등)
+           - 공식 기록이나 랭킹이 존재하는 항목
         
-        [출력 포맷]
-        1. 핵심키워드 - 핵심설명
-        2. 핵심키워드 - 핵심설명
-        ...
-        (10위까지 작성)
+        [✍️ 작성 포맷]
+        아래 형식을 토씨 하나 틀리지 말고 지켜. (인사말/사족 금지)
+        
+        1. 순위 및 명칭 - 핵심설명 (20자 이내)
+           (객관적 근거: 정확한 수치 또는 공식 기록 요약 1줄)
+        
+        2. 순위 및 명칭 - 핵심설명 (20자 이내)
+           (객관적 근거: 정확한 수치 또는 공식 기록 요약 1줄)
+        
+        ... (10위까지 작성)
         """
 
-        # 모델 설정 (가장 똑똑한 모델부터 순차 시도)
         models = ['gemini-1.5-flash', 'gemini-pro', 'gemini-1.0-pro']
         
         for model_name in models:
@@ -47,35 +53,37 @@ def generate_pure_content(topic):
                 response = model.generate_content(prompt)
                 return response.text.strip()
             except:
-                continue # 실패하면 다음 모델로 넘어감
+                continue
 
-        st.error("AI 연결에 실패했습니다. (API 키 오류 또는 구글 서버 문제)")
+        st.error("AI 연결 실패. (API 키 오류 또는 구글 서버 문제)")
         return None
 
     except Exception as e:
         st.error(f"오류 발생: {e}")
         return None
 
-# --- 2. 🎨 이미지 생성 함수 (디자인 공장) ---
+# --- 2. 🎨 이미지 생성 함수 (근거 데이터 추가 표시) ---
 def create_ranking_image(topic, text_content):
     W, H = 1080, 1350 
-    img = Image.new('RGB', (W, H), color=(0, 0, 0)) # 검은 배경
+    img = Image.new('RGB', (W, H), color=(0, 0, 0))
     draw = ImageDraw.Draw(img)
 
     try:
         font_title = ImageFont.truetype("NanumGothic-ExtraBold.ttf", 70) 
-        font_list = ImageFont.truetype("NanumGothic-ExtraBold.ttf", 42)
+        font_list = ImageFont.truetype("NanumGothic-ExtraBold.ttf", 40)
         font_sub = ImageFont.truetype("NanumGothic-ExtraBold.ttf", 30)
+        font_desc = ImageFont.truetype("NanumGothic-ExtraBold.ttf", 25) # 근거용 작은 폰트
     except:
         font_title = ImageFont.load_default()
         font_list = ImageFont.load_default()
         font_sub = ImageFont.load_default()
+        font_desc = ImageFont.load_default()
 
-    # 빨간 테두리 디자인
+    # 디자인
     draw.rectangle([(0,0), (W, H)], outline=(255, 0, 0), width=15)
     draw.line([(0, 250), (W, 250)], fill=(255, 0, 0), width=5)
 
-    # 제목 (자동 줄바꿈)
+    # 제목
     para = textwrap.wrap(topic, width=16)
     current_h = 80
     for line in para:
@@ -84,30 +92,34 @@ def create_ranking_image(topic, text_content):
         draw.text(((W - text_w) / 2, current_h), line, font=font_title, fill="white")
         current_h += 80
 
-    draw.text((50, 270), "AI KNOWLEDGE RANKING", font=font_sub, fill="gray")
+    draw.text((50, 270), "OFFICIAL DATA RANKING", font=font_sub, fill="gray")
 
     # 리스트 그리기
     lines = text_content.strip().split('\n')
     start_y = 350
-    gap = 90
     
+    # 랭킹 항목(큰 글씨)과 근거(작은 글씨)를 구분해서 그림
     count = 0
     for line in lines:
         clean_line = line.strip()
         if not clean_line: continue
         
-        # 숫자나 점 제거하고 내용만 추출 시도 (AI가 1. 2. 를 붙여줄 테니 그대로 사용)
-        if len(clean_line) > 0 and clean_line[0].isdigit():
+        # 1. 랭킹 항목 (숫자로 시작하는 줄)
+        if clean_line[0].isdigit() and "." in clean_line[:4]:
             count += 1
             if count > 10: break
             
             # 너무 길면 자르기
-            if len(clean_line) > 26: clean_line = clean_line[:26] + "..."
+            if len(clean_line) > 28: clean_line = clean_line[:28] + "..."
             
-            # 1~3위 금색 강조
             color = (255, 215, 0) if count <= 3 else "white"
             draw.text((80, start_y), clean_line, font=font_list, fill=color)
-            start_y += gap
+            start_y += 60 # 간격 조금 벌림
+
+        # 2. 객관적 근거 (괄호로 시작하거나 '근거:' 가 있는 줄)
+        elif clean_line.startswith("(") or "근거" in clean_line:
+            draw.text((100, start_y), clean_line, font=font_desc, fill=(200, 200, 200)) # 회색
+            start_y += 50 # 다음 항목으로 넘어가는 간격
 
     footer = "구독 🙏 좋아요 ❤️"
     bbox_foot = draw.textbbox((0, 0), footer, font=font_list)
@@ -116,8 +128,8 @@ def create_ranking_image(topic, text_content):
     return img
 
 # --- 3. 메인 화면 ---
-st.set_page_config(page_title="AI 지식 쇼츠 공장", page_icon="🧠", layout="wide")
-st.title("🧠 3호점: 순수 AI 지식 공장")
+st.set_page_config(page_title="팩트체크 쇼츠 공장", page_icon="⚖️", layout="wide")
+st.title("⚖️ 3호점: 팩트체크 쇼츠 공장")
 
 if 'draft' not in st.session_state:
     st.session_state['draft'] = ""
@@ -127,29 +139,25 @@ if 'img' not in st.session_state:
 col1, col2 = st.columns([1, 1])
 
 with col1:
-    st.subheader("1. 주제 입력 (AI 지식 기반)")
-    topic = st.text_input("주제", value="2025년 최고의 다이어트 식단 TOP 10")
+    st.subheader("1. 주제 입력 (검증된 데이터)")
+    topic = st.text_input("주제", value="세계에서 가장 비싼 기업 TOP 10")
     
-    # 통합 버튼
-    if st.button("⚡ 제미나이 뇌 가동 + 이미지 생성", use_container_width=True, type="primary"):
-        with st.spinner("제미나이가 알고리즘을 분석 중입니다..."):
-            # 1. 제미나이에게 바로 물어보기 (검색 과정 생략)
+    if st.button("🔍 팩트 기반 분석 + 이미지 생성", use_container_width=True, type="primary"):
+        with st.spinner("제미나이가 전 세계 통계와 기록을 검증 중입니다..."):
             ai_result = generate_pure_content(topic)
             
             if ai_result:
                 st.session_state['draft'] = ai_result
-                # 2. 이미지 생성
                 st.session_state['img'] = create_ranking_image(topic, ai_result)
-                st.success("생성 완료!")
+                st.success("검증 완료!")
             else:
-                # 에러 메시지는 함수 안에서 출력됨
-                pass
+                pass # 에러는 위에서 출력됨
 
     # 수정 공간
     edited_text = st.text_area(
-        "내용 수정 (AI가 작성한 내용)", 
+        "내용 수정 (근거 데이터 포함)", 
         value=st.session_state['draft'],
-        height=350
+        height=400
     )
     
     if st.button("🔄 수정사항 반영해서 이미지 다시 만들기"):
@@ -164,6 +172,6 @@ with col2:
         
         buf = io.BytesIO()
         st.session_state['img'].save(buf, format="PNG")
-        st.download_button("💾 이미지 다운로드", buf.getvalue(), "ai_ranking.png", "image/png", use_container_width=True)
+        st.download_button("💾 이미지 다운로드", buf.getvalue(), "fact_ranking.png", "image/png", use_container_width=True)
     else:
-        st.info("왼쪽 버튼을 누르면 AI가 즉시 순위를 매깁니다.")
+        st.info("왼쪽 버튼을 누르면 '객관적 수치'가 포함된 랭킹이 나옵니다.")
