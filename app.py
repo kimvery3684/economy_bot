@@ -3,21 +3,24 @@ import urllib.request
 import urllib.parse
 import json
 import re
+from PIL import Image, ImageDraw, ImageFont
+import textwrap
+import io
+import google.generativeai as genai
 
-# --- 1. HTML 태그 제거 및 텍스트 정리 함수 ---
-def clean_html(text):
-    """<b>, &quot; 같은 지저분한 태그를 제거하는 함수"""
-    text = re.sub('<.*?>', '', text) # 태그 제거
-    text = text.replace('&quot;', '"').replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
-    return text
+# ==========================================
+# 👇 여기에 제미나이 API 키를 입력하세요! (따옴표 안에 넣기)
+GEMINI_API_KEY = "여기에_API_키를_붙여넣으세요"
+# ==========================================
 
-# --- 2. 네이버 검색 함수 ---
+# --- 1. 네이버 검색 함수 ---
 def naver_blog_search(keyword):
     client_id = "sk0nUwhPD16DNEo0gQkD"
     client_secret = "1cLzXGU3Yn"
     
-    encText = urllib.parse.quote(keyword)
-    url = "https://openapi.naver.com/v1/search/blog?query=" + encText + "&display=10" # 10개 검색
+    clean_keyword = keyword.replace('"', '').replace("'", "")
+    encText = urllib.parse.quote(clean_keyword)
+    url = f"https://openapi.naver.com/v1/search/blog?query={encText}&display=20&sort=sim" 
     
     request = urllib.request.Request(url)
     request.add_header("X-Naver-Client-Id", client_id)
@@ -26,85 +29,138 @@ def naver_blog_search(keyword):
     try:
         response = urllib.request.urlopen(request)
         if response.getcode() == 200:
-            response_body = response.read()
-            data = json.loads(response_body.decode('utf-8'))
-            return data['items']
-        else:
-            return None
+            return json.loads(response.read().decode('utf-8'))['items']
     except Exception as e:
-        st.error(f"검색 중 오류 발생: {e}")
         return None
+    return None
 
-# --- 3. Streamlit 화면 구성 ---
-st.set_page_config(page_title="경제 쇼츠 자동 공장", page_icon="💰", layout="wide")
+# --- 2. 🤖 제미나이 지능형 요약 함수 ---
+def ask_gemini_to_organize(topic, raw_data):
+    """네이버 블로그 데이터를 제미나이에게 주고 깔끔한 랭킹으로 정리시킴"""
+    if "여기에" in GEMINI_API_KEY:
+        st.error("⚠️ 코드 맨 위 'GEMINI_API_KEY'에 키를 입력해주세요!")
+        return []
 
-st.title("💰 3호점: 경제 쇼츠 자동 완성 공장")
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel('gemini-pro')
+        
+        # 블로그 데이터 텍스트화
+        context = ""
+        for item in raw_data:
+            title = item['title'].replace('<b>', '').replace('</b>', '')
+            desc = item['description'].replace('<b>', '').replace('</b>', '')
+            context += f"- {title} : {desc}\n"
 
-# 세션 상태 초기화
-if 'search_result' not in st.session_state:
-    st.session_state['search_result'] = ""
-if 'current_topic' not in st.session_state:
-    st.session_state['current_topic'] = "2025년 급등 예상 저평가 우량주 TOP 10"
+        # 제미나이 명령 (프롬프트)
+        prompt = f"""
+        너는 경제 유튜브 쇼츠 작가야. 아래 블로그 검색 결과를 분석해서 '{topic}'에 맞는 순위(TOP 10)를 만들어줘.
+        
+        [규칙]
+        1. 광고는 빼고 진짜 정보만 골라.
+        2. 출력은 오직 아래 형식으로만 해 (군더더기 말 절대 금지):
+           1. 핵심키워드 - 간단한설명
+           2. 핵심키워드 - 간단한설명
+           ...
+        
+        [데이터]
+        {context}
+        """
+        
+        response = model.generate_content(prompt)
+        lines = response.text.strip().split('\n')
+        # 빈 줄 제거하고 리스트로 변환
+        cleaned_list = [line for line in lines if line.strip() != ""]
+        return cleaned_list[:10]
+
+    except Exception as e:
+        st.error(f"제미나이 오류: {e}")
+        return []
+
+# --- 3. 이미지 생성 함수 ---
+def create_ranking_image(topic, ranking_list):
+    W, H = 1080, 1350 
+    img = Image.new('RGB', (W, H), color=(0, 0, 0)) # 검은 배경
+    draw = ImageDraw.Draw(img)
+
+    try:
+        font_title = ImageFont.truetype("NanumGothic-ExtraBold.ttf", 70) 
+        font_list = ImageFont.truetype("NanumGothic-ExtraBold.ttf", 40)
+        font_sub = ImageFont.truetype("NanumGothic-ExtraBold.ttf", 35)
+    except:
+        font_title = ImageFont.load_default()
+        font_list = ImageFont.load_default()
+        font_sub = ImageFont.load_default()
+
+    # 테두리 및 디자인
+    draw.rectangle([(0,0), (W, H)], outline=(255, 0, 0), width=15)
+    draw.line([(0, 250), (W, 250)], fill=(255, 0, 0), width=5)
+
+    # 제목
+    para = textwrap.wrap(topic, width=16)
+    current_h = 80
+    for line in para:
+        bbox = draw.textbbox((0, 0), line, font=font_title)
+        text_w = bbox[2] - bbox[0]
+        draw.text(((W - text_w) / 2, current_h), line, font=font_title, fill="white")
+        current_h += 80
+
+    draw.text((50, 270), "Analysis by Gemini AI", font=font_sub, fill="gray")
+
+    # 리스트 그리기
+    start_y = 350
+    gap = 90
+    for i, text in enumerate(ranking_list, 1):
+        if len(text) > 28: text = text[:28] + "..."
+        color = (255, 215, 0) if i <= 3 else "white"
+        draw.text((80, start_y), text, font=font_list, fill=color)
+        start_y += gap
+
+    # 푸터
+    footer = "구독 🙏 좋아요 ❤️"
+    bbox_foot = draw.textbbox((0, 0), footer, font=font_list)
+    draw.text(((W - (bbox_foot[2] - bbox_foot[0]))/2, H - 100), footer, font=font_list, fill=(255, 100, 100))
+
+    return img
+
+# --- 4. 메인 화면 ---
+st.set_page_config(page_title="AI 경제 쇼츠 공장", page_icon="🤖", layout="wide")
+st.title("🤖 3호점: 제미나이 탑재 쇼츠 공장")
+
+if 'result_img' not in st.session_state:
+    st.session_state['result_img'] = None
 
 col1, col2 = st.columns([1, 1])
 
 with col1:
-    st.subheader("1. 콘텐츠 자동 생성")
+    st.subheader("1. 주제 입력")
+    topic = st.text_input("주제", value="2025년 주목해야 할 AI 관련주 TOP 10")
     
-    with st.container(border=True):
-        # 버튼 클릭 시 동작
-        if st.button("🔍 주제 검색 & AI 프롬프트 생성", use_container_width=True):
-            target_keyword = st.session_state['current_topic']
+    if st.button("✨ 제미나이! 검색+정리+이미지 원큐에 해줘", use_container_width=True, type="primary"):
+        with st.spinner("1단계: 네이버 블로그 뒤지는 중... 🕵️"):
+            raw_data = naver_blog_search(topic)
             
-            with st.spinner(f"네이버에서 '{target_keyword}' 정보를 긁어오는 중..."):
-                items = naver_blog_search(target_keyword)
+        if raw_data:
+            with st.spinner("2단계: 제미나이가 순위 정리 중... 🧠"):
+                clean_ranking = ask_gemini_to_organize(topic, raw_data)
                 
-                if items:
-                    # 1. 수집된 데이터 정리 (사람이 보기 좋게)
-                    raw_data = f"=== '{target_keyword}' 관련 네이버 블로그 데이터 ===\n\n"
-                    for i, item in enumerate(items, 1):
-                        title = clean_html(item['title'])
-                        desc = clean_html(item['description'])
-                        raw_data += f"{i}. 제목: {title}\n   요약: {desc}\n   링크: {item['link']}\n\n"
-                    
-                    # 2. AI에게 명령할 프롬프트 자동 생성 (여기가 핵심!)
-                    ai_prompt = f"""
-==================================================
-[AI 작업 지시서]
-위의 '네이버 블로그 데이터'를 바탕으로 유튜브 쇼츠 대본을 작성해줘.
-
-1. 주제: {target_keyword}
-2. 형식: 사람들이 한눈에 볼 수 있는 '랭킹' 또는 '표' 형태
-3. 요구사항:
-   - 블로그 내용들에서 공통적으로 언급되는 종목이나 트렌드를 5~7개 뽑아줘.
-   - 각 항목별로 [순위 / 이름 / 핵심특징 / 수익률(있으면)] 형태로 정리해줘.
-   - 결론은 "구독과 좋아요"를 유도하는 멘트로 끝내줘.
-   - 말투는 빠르고 임팩트 있게 (유튜브 쇼츠 스타일)
-==================================================
-"""
-                    # 결과 합치기
-                    final_output = raw_data + ai_prompt
-                    
-                    st.session_state['search_result'] = final_output
-                    st.success("데이터 수집 완료! 아래 내용을 복사해서 AI에게 붙여넣으세요.")
+                if clean_ranking:
+                    with st.spinner("3단계: 이미지 생성 중... 🎨"):
+                        img = create_ranking_image(topic, clean_ranking)
+                        st.session_state['result_img'] = img
+                        st.success("완료!")
                 else:
-                    st.warning("검색 결과가 없습니다.")
-
-        # 제목 입력
-        title_input = st.text_area("제목 (여기에 주제를 적으세요)", value=st.session_state['current_topic'], height=68)
-        st.session_state['current_topic'] = title_input
-
-        # 데이터 출력
-        st.text_area(
-            "데이터 & 프롬프트 (복사해서 챗GPT/Gemini에 붙여넣기)", 
-            value=st.session_state['search_result'], 
-            height=500,
-            help="이 내용을 복사해서 AI 채팅창에 그대로 붙여넣으면 바로 대본이 나옵니다."
-        )
-
-    with st.expander("디자인 조절"):
-        st.write("폰트 크기, 배경 색상 등 설정")
+                    st.error("제미나이 키를 확인해주세요!")
+        else:
+            st.error("검색 결과가 없습니다.")
 
 with col2:
-    st.subheader("🖼️ 미리보기 & 영상 제작")
-    st.info("이곳에 만들어진 랭킹 표 이미지가 표시됩니다.")
+    st.subheader("🖼️ 결과물")
+    if st.session_state['result_img']:
+        st.image(st.session_state['result_img'], caption="Gemini 결과", use_container_width=True)
+        
+        buf = io.BytesIO()
+        st.session_state['result_img'].save(buf, format="PNG")
+        st.download_button("💾 이미지 저장", buf.getvalue(), "shorts_card.png", "image/png", use_container_width=True)
+    else:
+        st.info("왼쪽 버튼을 누르면 AI가 일을 시작합니다.")
