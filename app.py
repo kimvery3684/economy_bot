@@ -6,10 +6,10 @@ import re
 from PIL import Image, ImageDraw, ImageFont
 import textwrap
 import io
-import google.generativeai as genai
+import requests  # <-- 구글 도구 대신 이걸 사용합니다 (기본 설치됨)
 
 # ==========================================
-# 👇 여기에 제미나이 API 키를 입력하세요!
+# 👇 여기에 제미나이 API 키를 입력하세요! (따옴표 필수!)
 GEMINI_API_KEY = "AIzaSyC-QRPifVhQGIGCjxk2kKDC0htuyiG0fTk"
 # ==========================================
 
@@ -34,54 +34,73 @@ def naver_blog_search(keyword):
         return None
     return None
 
-# --- 2. 🤖 제미나이 지능형 요약 함수 ---
+# --- 2. 🤖 제미나이 연결 함수 (직접 접속 방식) ---
 def ask_gemini_to_organize(topic, raw_data):
     if len(GEMINI_API_KEY) < 10 or "여기에" in GEMINI_API_KEY:
         st.error("⚠️ 코드 상단의 GEMINI_API_KEY에 실제 키를 입력해주세요!")
         return []
 
+    # 블로그 데이터 정리
+    context = ""
+    for item in raw_data:
+        title = item['title'].replace('<b>', '').replace('</b>', '')
+        desc = item['description'].replace('<b>', '').replace('</b>', '')
+        context += f"- {title} : {desc}\n"
+
+    # 제미나이에게 보낼 메시지
+    prompt = f"""
+    너는 경제 유튜브 쇼츠 작가야. 아래 블로그 검색 결과를 분석해서 '{topic}'에 맞는 순위(TOP 10)를 만들어줘.
+    
+    [규칙]
+    1. 광고는 빼고 진짜 정보만 골라.
+    2. 출력은 오직 아래 형식으로만 해 (군더더기 말 절대 금지):
+       1. 핵심키워드 - 간단한설명
+       2. 핵심키워드 - 간단한설명
+       ...
+    
+    [데이터]
+    {context}
+    """
+
+    # 🔥 [핵심] 라이브러리 없이 웹 주소로 직접 요청 (가장 안정적)
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    
+    headers = {'Content-Type': 'application/json'}
+    data = {
+        "contents": [{
+            "parts": [{"text": prompt}]
+        }]
+    }
+
     try:
-        genai.configure(api_key=GEMINI_API_KEY)
+        response = requests.post(url, headers=headers, json=data)
         
-        # 🔥 [수정] 가장 호환성이 좋은 모델명으로 지정
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        
-        context = ""
-        for item in raw_data:
-            title = item['title'].replace('<b>', '').replace('</b>', '')
-            desc = item['description'].replace('<b>', '').replace('</b>', '')
-            context += f"- {title} : {desc}\n"
-
-        prompt = f"""
-        너는 경제 유튜브 쇼츠 작가야. 아래 블로그 검색 결과를 분석해서 '{topic}'에 맞는 순위(TOP 10)를 만들어줘.
-        
-        [규칙]
-        1. 광고는 빼고 진짜 정보만 골라.
-        2. 출력은 오직 아래 형식으로만 해 (군더더기 말 절대 금지):
-           1. 핵심키워드 - 간단한설명
-           2. 핵심키워드 - 간단한설명
-           ...
-        
-        [데이터]
-        {context}
-        """
-        
-        response = model.generate_content(prompt)
-        lines = response.text.strip().split('\n')
-        cleaned_list = [line for line in lines if line.strip() != ""]
-        return cleaned_list[:10]
-
-    except Exception as e:
-        # 혹시 1.5-flash가 안되면 pro로 자동 재시도
-        try:
-            model_backup = genai.GenerativeModel('gemini-pro')
-            response = model_backup.generate_content(prompt)
-            lines = response.text.strip().split('\n')
+        if response.status_code == 200:
+            result = response.json()
+            # 응답에서 텍스트 추출
+            text = result['candidates'][0]['content']['parts'][0]['text']
+            
+            # 리스트로 변환
+            lines = text.strip().split('\n')
             cleaned_list = [line for line in lines if line.strip() != ""]
             return cleaned_list[:10]
-        except:
-            st.error(f"제미나이 오류: {e}")
-            return []
+        else:
+            # 1.5-flash가 안되면 gemini-pro로 재시도
+            url_backup = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
+            response = requests.post(url_backup, headers=headers, json=data)
+            if response.status_code == 200:
+                 result = response.json()
+                 text = result['candidates'][0]['content']['parts'][0]['text']
+                 lines = text.strip().split('\n')
+                 cleaned_list = [line for line in lines if line.strip() != ""]
+                 return cleaned_list[:10]
+            else:
+                st.error(f"오류 발생: {response.text}")
+                return []
+
+    except Exception as e:
+        st.error(f"연결 오류: {e}")
+        return []
 
 # --- 3. 이미지 생성 함수 ---
 def create_ranking_image(topic, ranking_list):
